@@ -262,14 +262,14 @@
         const pane=$('account-pane');pane.setAttribute('aria-labelledby','account-tab-'+tab);notice.textContent=success;
         if(tab==='forgot'){pane.innerHTML='<p class="account-help">找回密码暂未开放。忘记密码请联系管理员协助重置。</p>';return;}
         const registering=tab==='register';
-        pane.innerHTML=`<p class="account-help">${registering?'账号不能重名。账号和密码都区分大小写，密码至少 6 个字符。':'用你的阅读账号接着读，账号和密码都区分大小写。'}</p><form id="account-form" class="account-form"><label for="account-username">账号</label><input id="account-username" type="text" required maxlength="64" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false"><label for="account-password">密码</label><input id="account-password" type="password" required minlength="6" maxlength="72" autocomplete="${registering?'new-password':'current-password'}" autocapitalize="none">${registering?'<label for="account-confirm-password">确认密码</label><input id="account-confirm-password" type="password" required minlength="6" maxlength="72" autocomplete="new-password" autocapitalize="none">':''}<button class="primary-button" type="submit">${registering?'注册':'登录'}</button></form>`;
+        pane.innerHTML=`<p class="account-help">${registering?'注册需管理员提供的一次性激活码，已有账号登录不需要。账号和密码区分大小写，密码至少 6 个字符。':'用你的阅读账号接着读，账号和密码都区分大小写。'}</p><form id="account-form" class="account-form"><label for="account-username">账号</label><input id="account-username" type="text" required maxlength="64" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false"><label for="account-password">密码</label><input id="account-password" type="password" required minlength="6" maxlength="72" autocomplete="${registering?'new-password':'current-password'}" autocapitalize="none">${registering?'<label for="account-confirm-password">确认密码</label><input id="account-confirm-password" type="password" required minlength="6" maxlength="72" autocomplete="new-password" autocapitalize="none"><label for="account-activation-code">激活码</label><input id="account-activation-code" type="text" required maxlength="64" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" placeholder="粘贴管理员提供的完整激活码">':''}<button class="primary-button" type="submit">${registering?'注册':'登录'}</button></form>`;
         $('account-username').value=retainedName;
         $('account-form').onsubmit=e=>{
           e.preventDefault();const accountName=$('account-username').value,password=$('account-password'),confirmation=$('account-confirm-password');
           void action(async()=>{
             try{
               if(!registering&&database.pending)throw Error('访客记录尚未保存，请先在设置中重试或导出。');
-              if(cloud.mode==='username')await cloud.account(tab,accountName,password.value,confirmation?.value);
+              if(cloud.mode==='username')await cloud.account(tab,accountName,password.value,confirmation?.value,$('account-activation-code')?.value);
               else{
                 if(registering)throw Error('此版本使用邀请制，请联系管理员。');
                 if(!cloud.persistent)throw Error('请允许此网站保存登录状态后再登录。');

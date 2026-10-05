@@ -34,16 +34,18 @@
     return core.validate({...core.merge(remote,local),saved,index:local.index!==base.index?local.index:remote.index,large:local.large!==base.large?local.large:remote.large});
   }
   async function identity(){const {data,error}=await client.auth.getSession();if(error)throw Error('账户连接失败');return data.session?.user||null;}
-  async function account(action,username,password,confirmPassword){
+  async function account(action,username,password,confirmPassword,activationCode){
     if(!persistent)throw Error('此浏览器禁止网站存储，请允许此网站保存登录状态，或换一个浏览器再登录。');
     if(typeof username!=='string'||!username||[...username].length>64||username!==username.trim()||/[\u0000-\u001f\u007f]/.test(username))
       throw Error('账号需要 1–64 个字符，首尾不能有空格。');
     if(typeof password!=='string'||[...password].length<6)throw Error('密码至少需要 6 个字符，区分大小写。');
     if(new TextEncoder().encode(password).length>72)throw Error('密码过长，请缩短后重试。');
     if(action==='register'&&password!==confirmPassword)throw Error('两次输入的密码不一致。');
+    const code=typeof activationCode==='string'?activationCode.trim().toUpperCase():'';
+    if(action==='register'&&!/^RD-(?:[A-Z2-7]{4}-){7}[A-Z2-7]{4}$/.test(code))throw Error('注册需要有效的激活码，请向管理员领取。');
     let response,value;
     try{response=await fetch(config.url+'/functions/v1/reader-account',{method:'POST',headers:{'Content-Type':'application/json',apikey:config.publishableKey},
-      body:JSON.stringify({action,username,password,...(action==='register'?{confirmPassword}:{} )}),signal:AbortSignal.timeout(20000)});value=await response.json();}
+      body:JSON.stringify({action,username,password,...(action==='register'?{confirmPassword,activationCode:code}:{} )}),signal:AbortSignal.timeout(20000)});value=await response.json();}
     catch{throw Error('连接失败，请检查网络后重试。');}
     if(!response.ok)throw Error(value.message||'账号操作失败，请稍后重试。');
     if(action==='login'){
