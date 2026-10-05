@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f7f6f0"><meta name="description" content="每天看懂一句英文。从一点点开始，让阅读成为日常。">
+  <title>ReadEveryday · 每天看懂一句</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%23264f43'/%3E%3Ctext x='13' y='45' font-family='Georgia' font-size='44' fill='%23f7f6f0'%3Er%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+  <script defer src="browser-config.js"></script><script defer src="core.js"></script><script defer src="browser-db.js"></script><script defer src="word-library.js"></script><script defer src="app.js"></script>
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="#" aria-label="ReadEveryday 首页"><span class="brand-icon">r<span>∙</span></span><span>ReadEveryday<small>一点点，也是在向前。</small></span></a>
+    <div class="header-actions"><span class="edition">YOUR DAILY READING</span><button id="library" class="quiet-button">换篇阅读</button><button id="notebook" class="quiet-button">我的词本 <span id="saved-count">0</span></button><button id="settings" class="icon-button" aria-label="设置与进度备份" title="设置与备份">☷</button></div>
+  </header>
+  <main class="layout">
+    <aside class="sidebar">
+      <div class="side-label">你的阅读角落</div>
+      <section class="daily-card"><div class="daily-top"><span class="little-sun" aria-hidden="true">✳</span><span id="date"></span></div><h2 id="daily-title">今天，看懂一句就好。</h2><p id="daily-caption">给英文一点点时间。</p><div class="daily-count"><strong id="daily-count">0</strong><span> / 1 句 · 今日小目标</span></div><div class="daily-track"><div id="daily-fill"></div></div><p class="daily-note" id="daily-note">不用赶进度，从这里开始。</p></section>
+      <div class="side-label library-label">正在读 <span>01</span></div>
+      <button class="article-tile" id="article-info"><span class="article-art" aria-hidden="true"><span class="coin coin-one">$</span><span class="coin coin-two">☺</span><i></i></span><span class="article-name">Money & happiness</span><span class="article-desc">金钱与幸福感</span><span class="article-source">2014 考研英语二 · Text 1</span><span class="article-progress" id="article-progress">0 / 18 句已读</span></button>
+      <p class="side-foot">慢一点，读进去。<br>One sentence at a time.</p>
+    </aside>
+    <section class="reading-area" aria-label="逐句阅读">
+      <div class="reading-top"><div><div class="eyebrow">A LITTLE ENGLISH, EVERY DAY</div><h1>每天看懂一句。</h1></div><span class="local-badge"><i></i> 浏览器体验</span></div>
+      <div class="reader-card">
+        <div class="reader-meta"><span id="sentence-index">SENTENCE 01 / 18</span><span id="paragraph-label">第 1 段</span></div>
+        <div class="sentence-progress" id="sentence-progress" aria-label="句子导航"></div>
+        <div class="sentence-wrap"><p id="sentence" lang="en" aria-label="英文句子，点击单词查看解释"></p></div>
+        <div class="lookup-tip"><span aria-hidden="true">↗</span> 不懂的词，点一下就好。</div>
+        <div id="phrases" class="phrase-list" aria-label="本句短语"></div>
+        <div class="help-sections">
+          <details id="structure"><summary><span class="help-icon">⌘</span> 拆开这句话<span class="summary-aside">先看主干</span></summary><div id="structure-content" class="help-content"></div></details>
+          <details id="translation"><summary><span class="help-icon">译</span> 看中文意思<span class="summary-aside">需要时再展开</span></summary><p id="translation-content" class="help-content"></p></details>
+          <details id="context"><summary><span class="help-icon">≋</span> 回到上下文<span class="summary-aside">读一小段</span></summary><div id="context-content" class="help-content context-content" lang="en"></div></details>
+        </div>
+        <div class="reader-actions"><button id="previous" class="quiet-button">← 上一句</button><button id="complete" class="primary-button">这句读懂了 <span>✓</span></button><button id="next" class="quiet-button">下一句 →</button></div>
+        <div id="encouragement" class="encouragement" role="status" hidden></div>
+        <button id="full-article" class="full-article" hidden>读完整篇了，连起来再看一遍 ↗</button>
+      </div>
+      <footer class="reading-footer"><span id="storage-status">进度自动保存在此浏览器</span><span class="keyboard-hint">← → 切换句子 · Esc 收起词卡</span></footer>
+      <p class="closing-line">A small read. A good day.</p>
+    </section>
+  </main>
+  <dialog id="word-dialog" class="word-dialog" aria-labelledby="word-title"><div class="dialog-top"><span class="eyebrow">A WORD AT A TIME</span><button class="icon-button close-dialog" aria-label="关闭词卡，返回阅读">×</button></div><div id="word-content"></div><div class="word-actions"><button id="save-word" class="secondary-button">＋ 收进词本</button><button class="primary-button close-dialog">回到句子 ↩</button></div></dialog>
+  <dialog id="panel-dialog" class="panel-dialog" aria-labelledby="panel-title"><div class="dialog-top"><h2 id="panel-title"></h2><button class="icon-button close-dialog" aria-label="关闭窗口">×</button></div><div id="panel-content"></div></dialog>
+  <div id="toast" role="status" class="toast" hidden></div>
+  <noscript>请启用浏览器 JavaScript，以使用点词解释和进度保存。</noscript>
+</body>
+</html>

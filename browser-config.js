@@ -1,0 +1,1 @@
+window.READEVERYDAY_BROWSER=true;
