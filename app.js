@@ -175,7 +175,6 @@
       $('panel-content').prepend(section);$('reading-history').onclick=readingHistory;
       if(database.cloud){$('retry-database').textContent='同步并重试保存';section.querySelector('p').textContent='两台设备修改同一篇文章时，会合并已读记录和新增词本，并保留任一设备明确移除的旧收藏。网络恢复后会继续同步；未同步时请先导出再换设备。';}
       $('retry-database').onclick=async()=>{try{state=core.validate(await database.retry());render();toast(database.status==='saved'?(database.cloud?'已保存到账号。':isBrowser?'已保存到此浏览器。':'已保存到本机数据库。'):'仍未保存，请保持页面打开或导出备份。');}catch{toast('重试失败，请保留页面并导出备份。');}};
-      if(isBrowser&&window.ReaderCloud)accountSettings();
     }
     $('font-normal').onclick=()=>{state.large=false;save();render();settings();};$('font-large').onclick=()=>{state.large=true;save();render();settings();};
     $('export').onclick=()=>{
@@ -188,25 +187,68 @@
     $('show-full').onclick=()=>{fullArticle();panelDialog.scrollTop=0;};
     if(!panelDialog.open)modal(panelDialog);
   }
-  function accountSettings(){
-    const cloud=window.ReaderCloud,section=document.createElement('section');section.className='settings-row';
-    section.innerHTML=database.cloud?`<h3>阅读账号</h3><p>${escape(database.user.email||'已登录')} · 进度与词本可跨设备接续。</p><button id="cloud-refresh" class="secondary-button">刷新云端记录</button> <button id="cloud-logout" class="secondary-button">退出账号</button><form id="cloud-password-form" class="account-form"><label for="cloud-new-password">${cloud.invited?'首次使用，请设置登录密码':'设置或修改密码'}</label><input id="cloud-new-password" type="password" minlength="12" maxlength="128" required autocomplete="new-password" placeholder="至少 12 个字符"><button class="secondary-button" type="submit">保存密码</button></form>`:
-      '<h3>登录后，接着读</h3><p>目前采用邀请制。获得维护者的邀请链接、设好密码后，就能在不同设备登录。访客进度保持独立，不会自动上传；需要迁移时可先导出，再登录并导入。</p><form id="cloud-login-form" class="account-form"><label for="cloud-email">邮箱</label><input id="cloud-email" type="email" required autocomplete="username"><label for="cloud-login-password">密码</label><input id="cloud-login-password" type="password" required autocomplete="current-password"><button class="secondary-button" type="submit">登录阅读账号</button></form>';
-    const notice=document.createElement('p');notice.setAttribute('role','status');section.append(notice);$('panel-content').prepend(section);
-    async function action(button,fn){button.disabled=true;notice.textContent='正在处理…';try{await fn();}catch(error){notice.textContent=error.message||'操作失败，请稍后重试。';}finally{button.disabled=false;}}
+  function accountPanel(mode='login',username='',message=''){
+    const cloud=window.ReaderCloud;
+    if(!cloud)return;
+    $('panel-title').textContent=database.cloud?'阅读账号':'登录阅读账号';
+    $('panel-content').replaceChildren();
+    const section=document.createElement('section');section.className='account-panel';
     if(database.cloud){
-      $('cloud-refresh').onclick=()=>action($('cloud-refresh'),async()=>{state=core.validate(await database.sync());render();notice.textContent=database.status==='saved'?'云端记录已更新。':'仍有待同步记录，请重试或导出。';});
-      $('cloud-logout').onclick=()=>action($('cloud-logout'),async()=>{await database.logout();location.reload();});
-      $('cloud-password-form').onsubmit=e=>{e.preventDefault();const field=$('cloud-new-password');void action(e.submitter,async()=>{const {error}=await cloud.client.auth.updateUser({password:field.value});field.value='';if(error)throw Error('密码未更新，请检查网络并使用至少 12 个字符。');notice.textContent='密码已设置；其他设备可用邮箱和密码登录。';});};
-    }else $('cloud-login-form').onsubmit=e=>{e.preventDefault();void action(e.submitter,async()=>{
-      if(database.pending)throw Error('访客记录尚未保存，请先重试或导出。');
-      if(!cloud.persistent)throw Error('此浏览器禁止网站存储，请允许此网站保存登录状态，或换一个浏览器再登录。');
-      const field=$('cloud-login-password'),{error}=await cloud.client.auth.signInWithPassword({email:$('cloud-email').value.trim(),password:field.value});field.value='';
-      if(error)throw Error('登录失败，请检查邮箱、密码或网络；新账号请先打开邀请链接。');
-      location.reload();
-    });};
-    if(!cloud.persistent)notice.textContent='此浏览器无法保留登录状态，下次需要重新登录；已同步记录仍在账号中。';
+      section.innerHTML=`<p class="panel-intro"><strong>${escape(database.user.user_metadata?.reader_username||database.user.email||'已登录')}</strong> · 进度与词本可跨设备接续。</p><div class="account-actions"><button id="cloud-refresh" class="secondary-button">刷新云端记录</button><button id="cloud-logout" class="secondary-button">退出账号</button></div><form id="cloud-password-form" class="account-form"><label for="cloud-new-password">${cloud.invited?'首次使用，请设置登录密码':'修改密码'}</label><input id="cloud-new-password" type="password" minlength="6" maxlength="72" required autocomplete="new-password" autocapitalize="none" placeholder="至少 6 个字符，区分大小写"><button class="secondary-button" type="submit">保存密码</button></form>`;
+    }else{
+      section.innerHTML='<div class="account-tabs" role="tablist" aria-label="账号操作"><button type="button" role="tab" id="account-tab-login" aria-controls="account-pane">登录</button><button type="button" role="tab" id="account-tab-register" aria-controls="account-pane">注册</button><button type="button" role="tab" id="account-tab-forgot" aria-controls="account-pane">找回密码</button></div><div id="account-pane" role="tabpanel"></div>';
+    }
+    const notice=document.createElement('p');notice.className='account-notice';notice.setAttribute('role','status');notice.setAttribute('aria-live','polite');section.append(notice);$('panel-content').append(section);
+    let busy=false;
+    async function action(fn){
+      if(busy)return;busy=true;section.querySelectorAll('button').forEach(b=>b.disabled=true);notice.textContent='正在处理…';
+      try{await fn();}catch(error){notice.textContent=error.message||'操作失败，请稍后重试。';}
+      finally{busy=false;section.querySelectorAll('button').forEach(b=>b.disabled=false);}
+    }
+    if(database.cloud){
+      $('cloud-refresh').onclick=()=>action(async()=>{state=core.validate(await database.sync());render();notice.textContent=database.status==='saved'?'云端记录已更新。':'仍有待同步记录，请重试或导出。';});
+      $('cloud-logout').onclick=()=>action(async()=>{await database.logout();location.reload();});
+      $('cloud-password-form').onsubmit=e=>{e.preventDefault();const field=$('cloud-new-password');void action(async()=>{
+        try{if([...field.value].length<6)throw Error('密码至少需要 6 个字符。');if(new TextEncoder().encode(field.value).length>72)throw Error('密码过长，请缩短后重试。');const {error}=await cloud.client.auth.updateUser({password:field.value});if(error)throw Error('密码未更新，请检查网络后重试。');notice.textContent='密码已更新，区分大小写。';}finally{field.value='';}
+      });};
+    }else{
+      function select(tab,retainedName='',success=''){
+        if(busy)return;
+        section.querySelectorAll('[role="tab"]').forEach(button=>{const selected=button.id==='account-tab-'+tab;button.setAttribute('aria-selected',selected);button.tabIndex=selected?0:-1;});
+        const pane=$('account-pane');pane.setAttribute('aria-labelledby','account-tab-'+tab);notice.textContent=success;
+        if(tab==='forgot'){pane.innerHTML='<p class="account-help">找回密码暂未开放。忘记密码请联系管理员协助重置。</p>';return;}
+        const registering=tab==='register';
+        pane.innerHTML=`<p class="account-help">${registering?'账号不能重名。账号和密码都区分大小写，密码至少 6 个字符。':'用你的阅读账号接着读，账号和密码都区分大小写。'}</p><form id="account-form" class="account-form"><label for="account-username">账号</label><input id="account-username" type="text" required maxlength="64" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false"><label for="account-password">密码</label><input id="account-password" type="password" required minlength="6" maxlength="72" autocomplete="${registering?'new-password':'current-password'}" autocapitalize="none">${registering?'<label for="account-confirm-password">确认密码</label><input id="account-confirm-password" type="password" required minlength="6" maxlength="72" autocomplete="new-password" autocapitalize="none">':''}<button class="primary-button" type="submit">${registering?'注册':'登录'}</button></form>`;
+        $('account-username').value=retainedName;
+        $('account-form').onsubmit=e=>{
+          e.preventDefault();const accountName=$('account-username').value,password=$('account-password'),confirmation=$('account-confirm-password');
+          void action(async()=>{
+            try{
+              if(!registering&&database.pending)throw Error('访客记录尚未保存，请先在设置中重试或导出。');
+              if(cloud.mode==='username')await cloud.account(tab,accountName,password.value,confirmation?.value);
+              else{
+                if(registering)throw Error('此版本使用邀请制，请联系管理员。');
+                if(!cloud.persistent)throw Error('请允许此网站保存登录状态后再登录。');
+                const {error}=await cloud.client.auth.signInWithPassword({email:accountName,password:password.value});if(error)throw Error('登录失败，请检查账号、密码或网络。');
+              }
+              if(registering){busy=false;select('login',accountName,'注册成功，请登录。');}
+              else location.reload();
+            }finally{password.value='';if(confirmation)confirmation.value='';}
+          });
+        };
+      }
+      section.querySelectorAll('[role="tab"]').forEach(button=>{
+        button.onclick=()=>select(button.id.replace('account-tab-',''),$('account-username')?.value||'');
+        button.onkeydown=event=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key)||busy)return;event.preventDefault();const tabs=[...section.querySelectorAll('[role="tab"]')],index=tabs.indexOf(button);const next=event.key==='Home'?0:event.key==='End'?2:(index+(event.key==='ArrowRight'?1:2))%3;tabs[next].click();tabs[next].focus();};
+      });
+      select(mode,username,message);
+    }
+    if(!cloud.persistent)notice.textContent='请允许此网站保存登录状态，或换一个浏览器再登录。';
+    if(!panelDialog.open)modal(panelDialog);
+  }
+  if(isBrowser&&window.ReaderCloud&&$('account')){
+    $('account').hidden=false;$('account').textContent=database.cloud?'账号':'登录';$('account').onclick=()=>accountPanel();
   }
   $('settings').onclick=settings;
-  render();if(initialNotice)toast(initialNotice);if(database?.cloud&&window.ReaderCloud?.invited)settings();
+  render();if(initialNotice)toast(initialNotice);if(database?.cloud&&window.ReaderCloud?.invited)accountPanel();
 })();

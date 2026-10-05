@@ -10,6 +10,8 @@
     setItem(key,value){memory.set(key,value);try{localStorage.setItem(key,value);}catch{persistent=false;}},
     removeItem(key){memory.delete(key);try{localStorage.removeItem(key);}catch{persistent=false;}}
   };
+  try{const probe='read-everyday-auth-probe:'+Date.now()+':'+Math.random();localStorage.setItem(probe,'1');localStorage.removeItem(probe);}
+  catch{persistent=false;}
   const invited=new URLSearchParams(location.hash.slice(1)).get('type')==='invite';
   const client=root.ReaderSupabase.createClient(config.url,config.publishableKey,{auth:{storage},global:{
     fetch:(url,options={})=>{
@@ -32,6 +34,24 @@
     return core.validate({...core.merge(remote,local),saved,index:local.index!==base.index?local.index:remote.index,large:local.large!==base.large?local.large:remote.large});
   }
   async function identity(){const {data,error}=await client.auth.getSession();if(error)throw Error('账户连接失败');return data.session?.user||null;}
+  async function account(action,username,password,confirmPassword){
+    if(!persistent)throw Error('此浏览器禁止网站存储，请允许此网站保存登录状态，或换一个浏览器再登录。');
+    if(typeof username!=='string'||!username||[...username].length>64||username!==username.trim()||/[\u0000-\u001f\u007f]/.test(username))
+      throw Error('账号需要 1–64 个字符，首尾不能有空格。');
+    if(typeof password!=='string'||[...password].length<6)throw Error('密码至少需要 6 个字符，区分大小写。');
+    if(new TextEncoder().encode(password).length>72)throw Error('密码过长，请缩短后重试。');
+    if(action==='register'&&password!==confirmPassword)throw Error('两次输入的密码不一致。');
+    let response,value;
+    try{response=await fetch(config.url+'/functions/v1/reader-account',{method:'POST',headers:{'Content-Type':'application/json',apikey:config.publishableKey},
+      body:JSON.stringify({action,username,password,...(action==='register'?{confirmPassword}:{} )}),signal:AbortSignal.timeout(20000)});value=await response.json();}
+    catch{throw Error('连接失败，请检查网络后重试。');}
+    if(!response.ok)throw Error(value.message||'账号操作失败，请稍后重试。');
+    if(action==='login'){
+      if(!value.session?.access_token||!value.session?.refresh_token)throw Error('登录未完成，请稍后重试。');
+      const {error}=await client.auth.setSession(value.session);if(error)throw Error('登录状态未保存，请稍后重试。');
+    }
+    return value;
+  }
   async function open(data,core,list,user){
     activeOwner=user.id;
     const key='read-everyday-cloud-v1:'+user.id+':'+data.id;
@@ -117,5 +137,5 @@
     if(pending&&!blocked)timer=setTimeout(()=>void flush(),0);
     return session;
   }
-  root.ReaderCloud={client,ready,identity,open,merge,invited,get persistent(){return persistent;}};
+  root.ReaderCloud={client,ready,identity,open,merge,invited,mode:config.mode,account,get persistent(){return persistent;}};
 })(globalThis);
