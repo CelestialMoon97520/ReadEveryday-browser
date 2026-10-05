@@ -17,10 +17,10 @@
   function toast(text){$('toast').textContent=text;$('toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').hidden=true,3500);}
   function save(){if(stopped)return;if(!isBrowser){try{localStorage.setItem(STORAGE,JSON.stringify(state));storageOK=true;}catch{storageOK=false;}}if(database)database.save(state);updateStorageLabel();}
   function updateStorageLabel(){
-    if(database){const labels=isBrowser?{saved:'已保存到此浏览器',saving:'正在保存…',pending:'有待保存记录',error:'浏览器保存失败 · 设置中可重试或导出',conflict:'另一页面更新了记录 · 设置中可合并并重试'}:{saved:'已保存到本机个人数据库',saving:'正在保存到本机数据库…',pending:'有待保存记录',error:'数据库保存失败 · 请勿关闭，设置中可重试或导出',conflict:'另一页面更新了记录 · 设置中可合并并重试'};$('storage-status').textContent=labels[database.status]+(storageOK?'':' · 浏览器保存不可用');return;}
+    if(database){const labels=database.cloud?{saved:'已保存到账号 · 可跨设备接续',saving:'正在同步到账号…',pending:'有待同步记录',error:'云端连接失败 · 设置中可重试或导出',conflict:'记录或账号有变化 · 请在设置中重试或导出'}:isBrowser?{saved:'已保存到此浏览器',saving:'正在保存…',pending:'有待保存记录',error:'浏览器保存失败 · 设置中可重试或导出',conflict:'另一页面更新了记录 · 设置中可合并并重试'}:{saved:'已保存到本机个人数据库',saving:'正在保存到本机数据库…',pending:'有待保存记录',error:'数据库保存失败 · 请勿关闭，设置中可重试或导出',conflict:'另一页面更新了记录 · 设置中可合并并重试'};$('storage-status').textContent=labels[database.status]+(storageOK?'':' · 浏览器副本不可用');return;}
     $('storage-status').textContent=storageOK?'浏览器模式 · 未接入本机数据库':'浏览器未允许保存进度 · 可在设置中导出备份';
   }
-  if(database)database.subscribe((status,cacheOK)=>{storageOK=cacheOK;updateStorageLabel();});
+  if(database)database.subscribe((status,cacheOK,updated)=>{storageOK=cacheOK;if(updated){state=core.validate(updated);render();}else updateStorageLabel();});
   function updateStats(){
     if(stopped)return;
     const count=todayRead().length;
@@ -144,7 +144,7 @@
     try{
       const history=await database.history(),catalog=await database.catalog();
       const names=Object.fromEntries(catalog.map(a=>[a.id,a.source||a.title]));
-      $('panel-content').innerHTML=isBrowser?'<p class="panel-intro">学习记录保存在此浏览器。仅记录明确标记为读懂的每日完成项，不把翻页算作完成。</p>':'<p class="panel-intro">个人历史存于 personal.sqlite3；题库来自 content.sqlite3。仅记录明确标记为读懂的每日完成项，不把翻页算作完成。</p>';
+      $('panel-content').innerHTML=database.cloud?'<p class="panel-intro">学习历史来自当前账号。仅记录明确标记为读懂的每日完成项，不把翻页算作完成。</p>':isBrowser?'<p class="panel-intro">学习记录保存在此浏览器。仅记录明确标记为读懂的每日完成项，不把翻页算作完成。</p>':'<p class="panel-intro">个人历史存于 personal.sqlite3；题库来自 content.sqlite3。仅记录明确标记为读懂的每日完成项，不把翻页算作完成。</p>';
       for(const article of catalog){
         const record=history.articles.find(a=>a.articleId===article.id),section=document.createElement('section');section.className='saved-entry';
         section.innerHTML=`<h3>${escape(article.title)}</h3><p>${escape(article.source)} · ${record?record.readCount:0} 句已读${record?' · 上次停在第 '+(record.index+1)+' 句':''}</p>`;
@@ -163,9 +163,9 @@
     $('font-normal').setAttribute('aria-pressed',!state.large);$('font-large').setAttribute('aria-pressed',state.large);
     if(database){
       $('panel-content').querySelector('.panel-intro').textContent=`ReadEveryday ${isBrowser?'浏览器体验版':'本地数据库版'} · 当前文章 ${data.sentences.length} 句`;
-      $('export').closest('section').querySelector('p').textContent=isBrowser?'记录只保存在当前浏览器，不会发送到服务器。导出的 JSON 包含当前文章的进度和词本，可在同一篇文章页面导入。清除网站数据或换浏览器前，请先导出备份。':'记录保存在电脑的 personal.sqlite3，浏览器保留待保存副本。迁移旧版：先在原 HTML 页面导出进度，再在这里导入；不会清除旧版记录。这里导出的 JSON 只包含当前文章，全部历史请停服后备份 storage 文件夹。';
+      $('export').closest('section').querySelector('p').textContent=database.cloud?'进度、每日完成项和词本保存在当前账号，浏览器保留待同步副本。导出的 JSON 包含当前文章记录，可自行备份；访客或本机旧进度只有在你主动导入时才会进入账号。':'记录'+(isBrowser?'只保存在当前浏览器，不会发送到服务器。导出的 JSON 包含当前文章的进度和词本，可在同一篇文章页面导入。清除网站数据或换浏览器前，请先导出备份。':'保存在电脑的 personal.sqlite3，浏览器保留待保存副本。迁移旧版：先在原 HTML 页面导出进度，再在这里导入；不会清除旧版记录。这里导出的 JSON 只包含当前文章，全部历史请停服后备份 storage 文件夹。');
       const about=$('panel-content').lastElementChild;
-      about.innerHTML=isBrowser?'<h3>打开网址，就能读</h3><p>无需安装程序或注册账号。文章与词卡通过网页加载，进度和收藏保存在你自己的浏览器中；手机和电脑暂不自动同步。</p><p>关闭页面即可退出。首次打开需要联网，此版本尚未提供完整离线缓存。</p>':'<h3>只在这台电脑上</h3><p>正文、内置释义和学习记录可离线使用。关闭网页后本机服务仍在后台运行；下次双击“启动阅读.vbs”会直接进入。重启电脑后不会自行启动。</p><button id="quit-reader" class="secondary-button">退出阅读并关闭本机服务</button><p>退出会停止所有已打开阅读页面的保存服务；请先确认其他页面也已保存。</p>';
+      about.innerHTML=isBrowser?'<h3>打开网址，就能读</h3><p>文章与词卡通过网页加载。无需账号即可体验，访客记录保存在当前浏览器；登录同一个阅读账号后，可在手机和电脑上接续进度与词本。</p><p>首次打开需要联网，此版本尚未提供完整离线缓存。关闭页面前请留意保存状态；公共设备用完后请退出账号。</p>':'<h3>只在这台电脑上</h3><p>正文、内置释义和学习记录可离线使用。关闭网页后本机服务仍在后台运行；下次双击“启动阅读.vbs”会直接进入。重启电脑后不会自行启动。</p><button id="quit-reader" class="secondary-button">退出阅读并关闭本机服务</button><p>退出会停止所有已打开阅读页面的保存服务；请先确认其他页面也已保存。</p>';
       if(!isBrowser)$('quit-reader').onclick=async()=>{
         if(database.pending){toast('还有未保存记录，请先重试保存或导出。');return;}
         if(!window.confirm('关闭本机阅读服务？请确认其他阅读页面也已保存。'))return;
@@ -173,7 +173,9 @@
       };
       const section=document.createElement('section');section.className='settings-row';section.innerHTML=`<h3>${isBrowser?'题库与阅读记录':'本地题库与个人数据'}</h3><button id="reading-history" class="secondary-button">阅读记录与历史／题库</button> <button id="retry-database" class="secondary-button">合并并重试保存</button><p>遇到多页面冲突，重试会合并已读记录和词本，保留本页阅读位置；另一页面移除过的收藏可能重新出现。</p>`;
       $('panel-content').prepend(section);$('reading-history').onclick=readingHistory;
-      $('retry-database').onclick=async()=>{try{state=core.validate(await database.retry());render();toast(database.status==='saved'?(isBrowser?'已保存到此浏览器。':'已保存到本机数据库。'):'仍未保存，请保持页面打开或导出备份。');}catch{toast('重试失败，请保留页面并导出备份。');}};
+      if(database.cloud){$('retry-database').textContent='同步并重试保存';section.querySelector('p').textContent='两台设备修改同一篇文章时，会合并已读记录和新增词本，并保留任一设备明确移除的旧收藏。网络恢复后会继续同步；未同步时请先导出再换设备。';}
+      $('retry-database').onclick=async()=>{try{state=core.validate(await database.retry());render();toast(database.status==='saved'?(database.cloud?'已保存到账号。':isBrowser?'已保存到此浏览器。':'已保存到本机数据库。'):'仍未保存，请保持页面打开或导出备份。');}catch{toast('重试失败，请保留页面并导出备份。');}};
+      if(isBrowser&&window.ReaderCloud)accountSettings();
     }
     $('font-normal').onclick=()=>{state.large=false;save();render();settings();};$('font-large').onclick=()=>{state.large=true;save();render();settings();};
     $('export').onclick=()=>{
@@ -186,6 +188,24 @@
     $('show-full').onclick=()=>{fullArticle();panelDialog.scrollTop=0;};
     if(!panelDialog.open)modal(panelDialog);
   }
+  function accountSettings(){
+    const cloud=window.ReaderCloud,section=document.createElement('section');section.className='settings-row';
+    section.innerHTML=database.cloud?`<h3>阅读账号</h3><p>${escape(database.user.email||'已登录')} · 进度与词本可跨设备接续。</p><button id="cloud-refresh" class="secondary-button">刷新云端记录</button> <button id="cloud-logout" class="secondary-button">退出账号</button><form id="cloud-password-form" class="account-form"><label for="cloud-new-password">${cloud.invited?'首次使用，请设置登录密码':'设置或修改密码'}</label><input id="cloud-new-password" type="password" minlength="12" maxlength="128" required autocomplete="new-password" placeholder="至少 12 个字符"><button class="secondary-button" type="submit">保存密码</button></form>`:
+      '<h3>登录后，接着读</h3><p>目前采用邀请制。获得维护者的邀请链接、设好密码后，就能在不同设备登录。访客进度保持独立，不会自动上传；需要迁移时可先导出，再登录并导入。</p><form id="cloud-login-form" class="account-form"><label for="cloud-email">邮箱</label><input id="cloud-email" type="email" required autocomplete="username"><label for="cloud-login-password">密码</label><input id="cloud-login-password" type="password" required autocomplete="current-password"><button class="secondary-button" type="submit">登录阅读账号</button></form>';
+    const notice=document.createElement('p');notice.setAttribute('role','status');section.append(notice);$('panel-content').prepend(section);
+    async function action(button,fn){button.disabled=true;notice.textContent='正在处理…';try{await fn();}catch(error){notice.textContent=error.message||'操作失败，请稍后重试。';}finally{button.disabled=false;}}
+    if(database.cloud){
+      $('cloud-refresh').onclick=()=>action($('cloud-refresh'),async()=>{state=core.validate(await database.sync());render();notice.textContent=database.status==='saved'?'云端记录已更新。':'仍有待同步记录，请重试或导出。';});
+      $('cloud-logout').onclick=()=>action($('cloud-logout'),async()=>{await database.logout();location.reload();});
+      $('cloud-password-form').onsubmit=e=>{e.preventDefault();const field=$('cloud-new-password');void action(e.submitter,async()=>{const {error}=await cloud.client.auth.updateUser({password:field.value});field.value='';if(error)throw Error('密码未更新，请检查网络并使用至少 12 个字符。');notice.textContent='密码已设置；其他设备可用邮箱和密码登录。';});};
+    }else $('cloud-login-form').onsubmit=e=>{e.preventDefault();void action(e.submitter,async()=>{
+      if(database.pending)throw Error('访客记录尚未保存，请先重试或导出。');
+      const field=$('cloud-login-password'),{error}=await cloud.client.auth.signInWithPassword({email:$('cloud-email').value.trim(),password:field.value});field.value='';
+      if(error)throw Error('登录失败，请检查邮箱、密码或网络；新账号请先打开邀请链接。');
+      location.reload();
+    });};
+    if(!cloud.persistent)notice.textContent='此浏览器无法保留登录状态，下次需要重新登录；已同步记录仍在账号中。';
+  }
   $('settings').onclick=settings;
-  render();if(initialNotice)toast(initialNotice);
+  render();if(initialNotice)toast(initialNotice);if(database?.cloud&&window.ReaderCloud?.invited)settings();
 })();

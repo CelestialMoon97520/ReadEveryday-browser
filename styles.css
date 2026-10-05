@@ -21,3 +21,7 @@ dialog{color:var(--ink);background:var(--white);border:1px solid var(--line);bor
 @media(max-width:440px){.site-header{height:auto;min-height:94px;flex-wrap:wrap;gap:6px;padding:12px 16px}.header-actions{margin-left:auto}.header-actions .quiet-button{white-space:nowrap}.brand{font-size:17px}.entry-page{padding-top:32px}.entry-card{padding:18px}}
 /* Small text cards: no playback, dictionary browser, or source images. */
 .card-phonetic{font:17px/1.6 "Segoe UI",Arial,sans-serif;color:#596b59;margin:-10px 0 18px;overflow-wrap:anywhere}.card-memory{padding:13px 15px;margin:18px 0;background:#f0f3e9;border-radius:9px}.card-memory h3{font-size:11px;font-weight:500;color:#718262;margin:0 0 8px}.card-memory b{display:block;font:19px/1.5 Georgia,serif;color:var(--green);overflow-wrap:anywhere}.card-memory p{font-size:12px;line-height:1.8;margin:7px 0}.card-memory small{font-size:11px;color:var(--muted);line-height:1.8}.word-library-status{font-size:11px;color:var(--muted);line-height:1.8}.card-source{font-size:10px;color:var(--muted);margin:8px 0 18px}
+/* Account controls share the reader's existing settings panel. */
+.account-form{display:grid;gap:10px;max-width:360px;margin:16px 0}
+.account-form input{box-sizing:border-box;width:100%;min-width:0;border:1px solid #b8b0a2;border-radius:10px;padding:12px;background:#fff;color:inherit;font:inherit}
+.account-form button{justify-self:start}

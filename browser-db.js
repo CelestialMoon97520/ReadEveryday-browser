@@ -22,6 +22,7 @@
     const list=await catalog(),id=new URLSearchParams(location.search).get('article')||list[0]?.id;
     if(!list.some(a=>a.id===id))throw Error('这篇文章不在当前题库中，请从首页重新选择。');
     const data=await readJSON('content/articles/'+encodeURIComponent(id)+'.json'),core=ReadCore.create(data);
+    if(root.ReaderCloud){await root.ReaderCloud.ready;const user=await root.ReaderCloud.identity();if(user)return root.ReaderCloud.open(data,core,list,user);}
     let current=null,storageOK=true;
     try{current=readRecord(data);}catch(error){
       if(error instanceof SyntaxError||/格式|进度|记录|词条/.test(error.message))throw Error('已有阅读记录无法读取，请保留浏览器数据并检查备份。');
