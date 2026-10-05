@@ -5,10 +5,11 @@
   let database;
   try{database=await LocalDB.open();}catch(error){$('sentence').textContent=error.message;$('storage-status').textContent=window.READEVERYDAY_BROWSER?'浏览器体验版未加载 · 请刷新重试，保留已有记录':'数据库未连接 · 请勿清除浏览器备份';$('complete').disabled=true;$('previous').disabled=true;$('next').disabled=true;return;}
   const isBrowser=database?.kind==='browser';
-  const data=database?database.data:window.READ_DATA,core=ReadCore.create(data);
-  const STORAGE=database?'read-everyday-db-backup:'+data.id:'read-everyday-v1'+(new URLSearchParams(location.search).get('qa')==='1'?'-qa':''),wordDialog=$('word-dialog'),panelDialog=$('panel-dialog');
+  let data=database?database.data:window.READ_DATA,core=ReadCore.create(data);
+  let STORAGE=database?'read-everyday-db-backup:'+data.id:'read-everyday-v1'+(new URLSearchParams(location.search).get('qa')==='1'?'-qa':'');
+  const wordDialog=$('word-dialog'),panelDialog=$('panel-dialog');
   let state=core.blank(),storageOK=true,activeWord=null,toastTimer,dialogBackPending=false,stopped=false;
-  let initialNotice='';
+  let initialNotice='',switching=false,historyRequest=0,sessionOperations=0,queuedArticle=null;
   try { if(database)state=database.state;else{const raw=localStorage.getItem(STORAGE);if(raw)state=core.validate(JSON.parse(raw));} }
   catch(error){if(error instanceof SyntaxError||error.message.includes('无效')||error.message.includes('词条')||error.message.includes('文件'))initialNotice='保存的进度无法读取，已从第一句开始。';else storageOK=false;}
   const escape=text=>String(text).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -17,10 +18,11 @@
   function toast(text){$('toast').textContent=text;$('toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').hidden=true,3500);}
   function save(){if(stopped)return;if(!isBrowser){try{localStorage.setItem(STORAGE,JSON.stringify(state));storageOK=true;}catch{storageOK=false;}}if(database)database.save(state);updateStorageLabel();}
   function updateStorageLabel(){
-    if(database){const labels=database.cloud?{saved:'已保存到账号 · 可跨设备接续',saving:'正在同步到账号…',pending:'有待同步记录',error:'云端连接失败 · 设置中可重试或导出',conflict:'记录或账号有变化 · 请在设置中重试或导出'}:isBrowser?{saved:'已保存到此浏览器',saving:'正在保存…',pending:'有待保存记录',error:'浏览器保存失败 · 设置中可重试或导出',conflict:'另一页面更新了记录 · 设置中可合并并重试'}:{saved:'已保存到本机个人数据库',saving:'正在保存到本机数据库…',pending:'有待保存记录',error:'数据库保存失败 · 请勿关闭，设置中可重试或导出',conflict:'另一页面更新了记录 · 设置中可合并并重试'};$('storage-status').textContent=labels[database.status]+(storageOK?'':' · 浏览器副本不可用');return;}
+    if(database){const labels=database.cloud?{checking:'已恢复浏览器副本 · 正在核对云端进度…',saved:'已保存到账号 · 可跨设备接续',saving:'正在同步到账号…',pending:'有待同步记录',error:'云端连接失败 · 设置中可重试或导出',conflict:'记录或账号有变化 · 请在设置中重试或导出'}:isBrowser?{saved:'已保存到此浏览器',saving:'正在保存…',pending:'有待保存记录',error:'浏览器保存失败 · 设置中可重试或导出',conflict:'另一页面更新了记录 · 设置中可合并并重试'}:{saved:'已保存到本机个人数据库',saving:'正在保存到本机数据库…',pending:'有待保存记录',error:'数据库保存失败 · 请勿关闭，设置中可重试或导出',conflict:'另一页面更新了记录 · 设置中可合并并重试'};$('storage-status').textContent=labels[database.status]+(storageOK?'':' · 浏览器副本不可用');return;}
     $('storage-status').textContent=storageOK?'浏览器模式 · 未接入本机数据库':'浏览器未允许保存进度 · 可在设置中导出备份';
   }
-  if(database)database.subscribe((status,cacheOK,updated)=>{storageOK=cacheOK;if(updated){state=core.validate(updated);render();}else updateStorageLabel();});
+  function subscribeDatabase(){const target=database;target?.subscribe((status,cacheOK,updated)=>{if(target!==database)return;storageOK=cacheOK;if(updated){state=core.validate(updated);render();}else updateStorageLabel();});}
+  subscribeDatabase();
   function updateStats(){
     if(stopped)return;
     const count=todayRead().length;
@@ -87,7 +89,39 @@
     }
     if(!fromHistory&&dialog.dataset.hasHistory==='true'&&history.state?.readEverydayDialog){dialogBackPending=true;history.back();setTimeout(()=>dialogBackPending=false,350);}dialog.dataset.hasHistory='false';
   }
-  window.addEventListener('popstate',()=>{dialogBackPending=false;close(wordDialog,true);close(panelDialog,true);});
+  window.addEventListener('popstate',()=>{
+    dialogBackPending=false;close(wordDialog,true);close(panelDialog,true);
+    if(isBrowser){const id=new URLSearchParams(location.search).get('article')||window.READEVERYDAY_RELEASE?.defaultArticle;if(id&&(id!==data.id||switching))void switchArticle(id,true);}
+  });
+  async function switchArticle(id,fromHistory=false){
+    if(stopped)return;
+    if(switching){queuedArticle={id,fromHistory};return;}
+    if(sessionOperations){toast('当前保存或账号操作尚未完成，请稍后换篇。');if(fromHistory){const url=new URL(location.href);url.searchParams.set('article',data.id);history.replaceState(null,'',url.href);}return;}
+    switching=true;historyRequest++;const previous=database;let next;
+    try{
+      if(previous.pending){await previous.retry();if(previous.pending)throw Error('还有未同步记录，请在设置中重试或导出后再换篇。');}
+      next=await LocalDB.open(id);
+      const nextCore=ReadCore.create(next.data);nextCore.validate(next.state);
+      if(queuedArticle){next.dispose?.({preservePending:true});next=null;return;}
+      // An operation may have been saved while the next article was loading.
+      if(previous.pending){await previous.retry();if(previous.pending)throw Error('还有未同步记录，请先重试或导出。');}
+      if(queuedArticle){next.dispose?.({preservePending:true});next=null;return;}
+      if(sessionOperations)throw Error('当前保存或账号操作尚未完成，请稍后换篇。');
+      previous.dispose?.();
+      const hadDialogHistory=panelDialog.open&&panelDialog.dataset.hasHistory==='true';
+      close(wordDialog,true);close(panelDialog,true);window.ReadWordLibrary?.stop();activeWord=null;
+      database=next;data=next.data;core=nextCore;state=nextCore.validate(next.state);STORAGE='read-everyday-db-backup:'+data.id;
+      ['structure','translation','context'].forEach(id=>$(id).open=false);
+      const url=new URL(location.href);url.search='';url.searchParams.set('article',data.id);url.hash='';
+      history[fromHistory||hadDialogHistory?'replaceState':'pushState']({readEverydayArticle:data.id},'',url.href);
+      subscribeDatabase();render();LocalDB.warm?.(data.id);
+      const card=document.querySelector('.reader-card');if(card.getBoundingClientRect().top<0)card.scrollIntoView({block:'start',behavior:'instant'});
+    }catch(error){
+      if(next&&next!==database)next.dispose?.({preservePending:true});
+      if(fromHistory){const url=new URL(location.href);url.search='';url.searchParams.set('article',data.id);history.replaceState({readEverydayArticle:data.id},'',url.href);}
+      toast(error.message||'这篇文章暂时无法打开，请重试。');
+    }finally{switching=false;if(queuedArticle){const queued=queuedArticle;queuedArticle=null;await switchArticle(queued.id,queued.fromHistory);}}
+  }
   [wordDialog,panelDialog].forEach(dialog=>{
     dialog.querySelectorAll('.close-dialog').forEach(b=>b.onclick=()=>close(dialog));
     dialog.addEventListener('cancel',e=>{e.preventDefault();close(dialog);});
@@ -140,22 +174,32 @@
   $('article-info').onclick=fullArticle;$('full-article').onclick=fullArticle;
   $('library').onclick=()=>{if(database){if(!panelDialog.open)modal(panelDialog);void readingHistory();}else toast('请从“启动阅读.vbs”进入完整题库。');};
   async function readingHistory(){
+    const target=database,request=++historyRequest;
     $('panel-title').textContent='阅读记录与历史';$('panel-content').textContent='正在读取题库与历史…';
     try{
-      const history=await database.history(),catalog=await database.catalog();
+      const [history,catalog]=await Promise.all([target.history({cached:true}),target.catalog()]);
+      if(target!==database||request!==historyRequest||$('panel-title').textContent!=='阅读记录与历史')return;
+      draw(history,catalog,target.cloud?'题库已就绪，正在更新云端历史…':'');
+      if(target.cloud)void target.history().then(remote=>{
+        if(target===database&&request===historyRequest&&panelDialog.open&&$('panel-title').textContent==='阅读记录与历史')draw(remote,catalog,'');
+      }).catch(()=>{if(target===database&&request===historyRequest&&$('history-notice'))$('history-notice').textContent='云端历史暂时不可用，已显示此账号在浏览器中的记录。';});
+    }catch{if(target===database&&request===historyRequest)$('panel-content').textContent=isBrowser?'读取失败，请刷新重试，并保留已有浏览器记录。':'读取失败，请确认本地服务仍在运行。未修改已有记录。';}
+    function draw(history,catalog,notice){
       const names=Object.fromEntries(catalog.map(a=>[a.id,a.source||a.title]));
       $('panel-content').innerHTML=database.cloud?'<p class="panel-intro">学习历史来自当前账号。仅记录明确标记为读懂的每日完成项，不把翻页算作完成。</p>':isBrowser?'<p class="panel-intro">学习记录保存在此浏览器。仅记录明确标记为读懂的每日完成项，不把翻页算作完成。</p>':'<p class="panel-intro">个人历史存于 personal.sqlite3；题库来自 content.sqlite3。仅记录明确标记为读懂的每日完成项，不把翻页算作完成。</p>';
+      if(database.cloud){const hint=document.createElement('p');hint.id='history-notice';hint.textContent=notice;hint.setAttribute('role','status');$('panel-content').append(hint);}
       for(const article of catalog){
         const record=history.articles.find(a=>a.articleId===article.id),section=document.createElement('section');section.className='saved-entry';
         section.innerHTML=`<h3>${escape(article.title)}</h3><p>${escape(article.source)} · ${record?record.readCount:0} 句已读${record?' · 上次停在第 '+(record.index+1)+' 句':''}</p>`;
         const button=document.createElement('button');button.className='secondary-button';button.textContent=record?'继续阅读':'开始阅读';
-        button.onclick=()=>{if(article.id===data.id){close(panelDialog);navigate(state.index);}else if(database.pending)toast('还有未保存记录，请先保存或导出。');else{const url=new URL(location.href);url.search='';url.searchParams.set('article',article.id);url.hash='';location.href=url.href;}};
+        button.onclick=()=>{if(article.id===data.id&&!switching){close(panelDialog);navigate(state.index);}else if(isBrowser){button.disabled=true;button.textContent='正在打开…';void switchArticle(article.id).finally(()=>{button.disabled=false;button.textContent=record?'继续阅读':'开始阅读';});}else if(database.pending)toast('还有未保存记录，请先保存或导出。');else{const url=new URL(location.href);url.search='';url.searchParams.set('article',article.id);url.hash='';location.href=url.href;}};
+        if(isBrowser)button.onpointerenter=button.onfocus=()=>void LocalDB.prefetch?.(article.id);
         section.append(button);$('panel-content').append(section);
       }
       const heading=document.createElement('h3');heading.textContent='每日完成历史';$('panel-content').append(heading);
       for(const day of history.days){const p=document.createElement('p');p.textContent=`${day.day} · ${names[day.articleId]||day.articleId} · ${day.count} 句`;$('panel-content').append(p);}
       if(!history.days.length)$('panel-content').insertAdjacentHTML('beforeend','<p>尚无完成记录。旧版记录可在设置中导入。</p>');
-    }catch{$('panel-content').textContent=isBrowser?'读取失败，请刷新重试，并保留已有浏览器记录。':'读取失败，请确认本地服务仍在运行。未修改已有记录。';}
+    }
   }
   function settings(){
     $('panel-title').textContent='按你的节奏来';
@@ -165,7 +209,7 @@
       $('panel-content').querySelector('.panel-intro').textContent=`ReadEveryday ${isBrowser?'浏览器体验版':'本地数据库版'} · 当前文章 ${data.sentences.length} 句`;
       $('export').closest('section').querySelector('p').textContent=database.cloud?'进度、每日完成项和词本保存在当前账号，浏览器保留待同步副本。导出的 JSON 包含当前文章记录，可自行备份；访客或本机旧进度只有在你主动导入时才会进入账号。':'记录'+(isBrowser?'只保存在当前浏览器，不会发送到服务器。导出的 JSON 包含当前文章的进度和词本，可在同一篇文章页面导入。清除网站数据或换浏览器前，请先导出备份。':'保存在电脑的 personal.sqlite3，浏览器保留待保存副本。迁移旧版：先在原 HTML 页面导出进度，再在这里导入；不会清除旧版记录。这里导出的 JSON 只包含当前文章，全部历史请停服后备份 storage 文件夹。');
       const about=$('panel-content').lastElementChild;
-      about.innerHTML=isBrowser?'<h3>打开网址，就能读</h3><p>文章与词卡通过网页加载。无需账号即可体验，访客记录保存在当前浏览器；登录同一个阅读账号后，可在手机和电脑上接续进度与词本。</p><p>首次打开需要联网，此版本尚未提供完整离线缓存。关闭页面前请留意保存状态；公共设备用完后请退出账号。</p>':'<h3>只在这台电脑上</h3><p>正文、内置释义和学习记录可离线使用。关闭网页后本机服务仍在后台运行；下次双击“启动阅读.vbs”会直接进入。重启电脑后不会自行启动。</p><button id="quit-reader" class="secondary-button">退出阅读并关闭本机服务</button><p>退出会停止所有已打开阅读页面的保存服务；请先确认其他页面也已保存。</p>';
+      about.innerHTML=isBrowser?'<h3>打开网址，就能读</h3><p>文章与词卡按发布版本缓存，换篇直接更新阅读内容。无需账号即可体验，访客记录保存在当前浏览器；登录同一个阅读账号后，可在手机和电脑上接续进度与词本。</p><p>首次打开、未缓存内容和云同步需要联网，缓存可能被浏览器清理；尚未提供完整离线启动。关闭页面前请留意保存状态；公共设备用完后请退出账号。</p>':'<h3>只在这台电脑上</h3><p>正文、内置释义和学习记录可离线使用。关闭网页后本机服务仍在后台运行；下次双击“启动阅读.vbs”会直接进入。重启电脑后不会自行启动。</p><button id="quit-reader" class="secondary-button">退出阅读并关闭本机服务</button><p>退出会停止所有已打开阅读页面的保存服务；请先确认其他页面也已保存。</p>';
       if(!isBrowser)$('quit-reader').onclick=async()=>{
         if(database.pending){toast('还有未保存记录，请先重试保存或导出。');return;}
         if(!window.confirm('关闭本机阅读服务？请确认其他阅读页面也已保存。'))return;
@@ -174,7 +218,7 @@
       const section=document.createElement('section');section.className='settings-row';section.innerHTML=`<h3>${isBrowser?'题库与阅读记录':'本地题库与个人数据'}</h3><button id="reading-history" class="secondary-button">阅读记录与历史／题库</button> <button id="retry-database" class="secondary-button">合并并重试保存</button><p>遇到多页面冲突，重试会合并已读记录和词本，保留本页阅读位置；另一页面移除过的收藏可能重新出现。</p>`;
       $('panel-content').prepend(section);$('reading-history').onclick=readingHistory;
       if(database.cloud){$('retry-database').textContent='同步并重试保存';section.querySelector('p').textContent='两台设备修改同一篇文章时，会合并已读记录和新增词本，并保留任一设备明确移除的旧收藏。网络恢复后会继续同步；未同步时请先导出再换设备。';}
-      $('retry-database').onclick=async()=>{try{state=core.validate(await database.retry());render();toast(database.status==='saved'?(database.cloud?'已保存到账号。':isBrowser?'已保存到此浏览器。':'已保存到本机数据库。'):'仍未保存，请保持页面打开或导出备份。');}catch{toast('重试失败，请保留页面并导出备份。');}};
+      $('retry-database').onclick=async()=>{sessionOperations++;try{state=core.validate(await database.retry());render();toast(database.status==='saved'?(database.cloud?'已保存到账号。':isBrowser?'已保存到此浏览器。':'已保存到本机数据库。'):'仍未保存，请保持页面打开或导出备份。');}catch{toast('重试失败，请保留页面并导出备份。');}finally{sessionOperations--;}};
     }
     $('font-normal').onclick=()=>{state.large=false;save();render();settings();};$('font-large').onclick=()=>{state.large=true;save();render();settings();};
     $('export').onclick=()=>{
@@ -182,7 +226,7 @@
     };
     $('import').onchange=async e=>{
       const file=e.target.files[0];if(!file)return;
-      try{if(file.size>1024*1024)throw Error('文件太大');const incoming=core.validate(JSON.parse(await file.text()));state=core.merge(state,incoming);save();render();toast('进度已合并，可以接着读了。');close(panelDialog);}catch{toast('导入失败：请选择 ReadEveryday 导出的有效进度 JSON。');e.target.value='';}
+      sessionOperations++;try{if(file.size>1024*1024)throw Error('文件太大');const incoming=core.validate(JSON.parse(await file.text()));state=core.merge(state,incoming);save();render();toast('进度已合并，可以接着读了。');close(panelDialog);}catch{toast('导入失败：请选择 ReadEveryday 导出的有效进度 JSON。');e.target.value='';}finally{sessionOperations--;}
     };
     $('show-full').onclick=()=>{fullArticle();panelDialog.scrollTop=0;};
     if(!panelDialog.open)modal(panelDialog);
@@ -201,9 +245,9 @@
     const notice=document.createElement('p');notice.className='account-notice';notice.setAttribute('role','status');notice.setAttribute('aria-live','polite');section.append(notice);$('panel-content').append(section);
     let busy=false;
     async function action(fn){
-      if(busy)return;busy=true;section.querySelectorAll('button').forEach(b=>b.disabled=true);notice.textContent='正在处理…';
+      if(busy)return;busy=true;sessionOperations++;section.querySelectorAll('button').forEach(b=>b.disabled=true);notice.textContent='正在处理…';
       try{await fn();}catch(error){notice.textContent=error.message||'操作失败，请稍后重试。';}
-      finally{busy=false;section.querySelectorAll('button').forEach(b=>b.disabled=false);}
+      finally{busy=false;sessionOperations--;section.querySelectorAll('button').forEach(b=>b.disabled=false);}
     }
     if(database.cloud){
       $('cloud-refresh').onclick=()=>action(async()=>{state=core.validate(await database.sync());render();notice.textContent=database.status==='saved'?'云端记录已更新。':'仍有待同步记录，请重试或导出。';});
@@ -250,5 +294,5 @@
     $('account').hidden=false;$('account').textContent=database.cloud?'账号':'登录';$('account').onclick=()=>accountPanel();
   }
   $('settings').onclick=settings;
-  render();if(initialNotice)toast(initialNotice);if(database?.cloud&&window.ReaderCloud?.invited)accountPanel();
+  render();if(isBrowser)LocalDB.warm?.(data.id);if(initialNotice)toast(initialNotice);if(database?.cloud&&window.ReaderCloud?.invited)accountPanel();
 })();

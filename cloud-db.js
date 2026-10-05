@@ -55,11 +55,12 @@
   async function open(data,core,list,user){
     activeOwner=user.id;
     const key='read-everyday-cloud-v1:'+user.id+':'+data.id;
-    let state=core.blank(),base=core.blank(),revision=0,pending=false,status='saved',cacheOK=true,listener=()=>{},blocked=false,flight=null,timer;
+    let state=core.blank(),base=core.blank(),revision=0,pending=false,status='checking',cacheOK=true,listener=()=>{},blocked=false,flight=null,refreshFlight=null,timer,disposed=false;
     const cached=storage.getItem(key);
     if(cached){
       try{const record=JSON.parse(cached);if(record.version!==1||!Number.isSafeInteger(record.revision)||record.revision<0)throw Error();
         state=core.validate(record.state);base=core.validate(record.base);revision=record.revision;pending=record.pending===true;
+        if(pending)status='pending';
       }catch{throw Error('此账号的浏览器副本无法读取，请保留数据并导出备份。');}
     }
     function writeCache(){
@@ -74,25 +75,60 @@
       if(error)throw Error('云端读取失败');
       const row=rows[0];return row?{...row,state:core.validate(row.state)}:{state:core.blank(),revision:0};
     }
-    try{const remote=await load();state=pending?merge(core,base,state,remote.state):remote.state;base=clone(remote.state);revision=remote.revision;writeCache();}
-    catch(error){if(!cached)throw Error('云端进度暂时无法读取，请联网后重试；不会以空记录覆盖。');status=blocked?'conflict':'error';}
+    async function refresh(){
+      if(refreshFlight)return refreshFlight;
+      // Serialize reads with writes. Merge against the server base, including edits
+      // made after cached progress was rendered and while this read was in flight.
+      refreshFlight=(async()=>{
+        if(flight)await flight;
+        const before=clone(base),remote=await load();await guard();
+        if(disposed)return;
+        if(blocked)throw Error('浏览器记录有变化，请先重试或导出。');
+        state=pending?merge(core,before,state,remote.state):remote.state;
+        base=clone(remote.state);revision=remote.revision;
+        pending=JSON.stringify(state)!==JSON.stringify(remote.state);writeCache();report(pending?'pending':'saved',true);
+      })();
+      try{await refreshFlight;}finally{refreshFlight=null;}
+    }
+    function cachedRows(){
+      const rows=[];
+      for(let i=0;i<localStorage.length;i++){
+        const k=localStorage.key(i);if(!k?.startsWith('read-everyday-cloud-v1:'+user.id+':'))continue;
+        const record=JSON.parse(localStorage.getItem(k)),s=record.state;
+        if(!list.some(a=>a.id===s?.articleId)||k!==('read-everyday-cloud-v1:'+user.id+':'+s.articleId))continue;
+        if(!Array.isArray(s.read)||!s.days||!Number.isInteger(s.index))throw Error('账号历史副本无法读取，请保留备份。');
+        rows.push({article_id:s.articleId,state:s,updated_at:record.updatedAt||'',pending:record.pending});
+      }
+      return rows;
+    }
+    function summarize(rows){
+      const articles=[],days=[];
+      for(const row of rows){const meta=list.find(a=>a.id===row.article_id);if(!meta)continue;
+        articles.push({articleId:meta.id,title:meta.title,source:meta.source,index:row.state.index,readCount:row.state.read.length,updatedAt:row.updated_at});
+        for(const [day,items] of Object.entries(row.state.days))days.push({articleId:meta.id,day,count:items.length});
+      }
+      articles.sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt));days.sort((a,b)=>b.day.localeCompare(a.day));return {articles,days};
+    }
     const session={kind:'browser',cloud:true,user,data,key,
       get state(){return state;},get pending(){return pending;},get status(){return status;},
       subscribe(fn){listener=fn;fn(status,cacheOK);},
-      save(value){state=core.validate(clone(value));pending=true;writeCache();report(blocked?'conflict':'pending');clearTimeout(timer);timer=setTimeout(()=>void flush(),250);},
+      dispose(options={}){
+        if(pending&&(!options.preservePending||!cacheOK))throw Error('还有未同步记录，请先重试或导出。');
+        disposed=true;clearTimeout(timer);listener=()=>{};
+        for(const [event,fn] of Object.entries(handlers))root.removeEventListener(event,fn);
+        authSubscription?.data?.subscription?.unsubscribe();
+      },
+      save(value){if(disposed)return;state=core.validate(clone(value));pending=true;writeCache();report(blocked?'conflict':'pending');clearTimeout(timer);timer=setTimeout(()=>void flush(),250);},
       async retry(){if(blocked){await guard();blocked=false;}pending=true;await flush();return clone(state);},
-      async sync(){if(pending){await flush();return clone(state);}const before=clone(state),row=await load();
-        state=pending?merge(core,before,state,row.state):row.state;base=clone(row.state);revision=row.revision;writeCache();report(pending?'pending':'saved',true);if(pending)void flush();return clone(state);},
+      async sync(){if(pending)await flush();else await refresh();if(pending)await flush();return clone(state);},
       async catalog(){return list.map(({file,...meta})=>meta);},
-      async history(){
+      async history(options={}){
+        if(options.cached)return summarize(cachedRows());
         await guard();const {data:rows,error}=await client.from('reader_progress').select('article_id,state,updated_at').eq('user_id',user.id);
         if(error)throw Error('云端历史读取失败');
-        const articles=[],days=[];
-        for(const row of rows){const meta=list.find(a=>a.id===row.article_id);if(!meta)continue;
-          articles.push({articleId:meta.id,title:meta.title,source:meta.source,index:row.state.index,readCount:row.state.read.length,updatedAt:row.updated_at});
-          for(const [day,items] of Object.entries(row.state.days))days.push({articleId:meta.id,day,count:items.length});
-        }
-        articles.sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt));days.sort((a,b)=>b.day.localeCompare(a.day));return {articles,days};
+        const combined=new Map(rows.map(row=>[row.article_id,row]));
+        for(const row of cachedRows())if(row.pending)combined.set(row.article_id,row);
+        return summarize([...combined.values()]);
       },
       async logout(){clearTimeout(timer);if(pending){await flush();if(pending)throw Error('还有未同步记录，请先重试或导出，再退出账号。');}
         try{
@@ -108,12 +144,14 @@
       }
     };
     async function flush(){
-      clearTimeout(timer);if(flight)return flight;if(blocked){report('conflict');return;}
+      clearTimeout(timer);if(refreshFlight){try{await refreshFlight;}catch{}}
+      if(disposed)return;if(flight)return flight;if(blocked){report('conflict');return;}
       flight=(async()=>{
         try{
-          for(let attempt=0;pending&&attempt<8;attempt++){
-            await guard();const sent=clone(state),sentBase=clone(base),expected=revision;report('saving');
+          for(let attempt=0;pending&&!disposed&&attempt<8;attempt++){
+            await guard();if(disposed)return;const sent=clone(state),sentBase=clone(base),expected=revision;report('saving');
             const {data:reply,error}=await client.rpc('save_reader_progress',{p_article_id:data.id,p_expected_revision:expected,p_state:sent});
+            if(disposed)return;
             if(error||!reply||!['saved','conflict'].includes(reply.status))throw Error('云端保存失败');
             if(reply.status==='conflict'){
               const remote=reply.row?core.validate(reply.row.state):core.blank();
@@ -123,18 +161,25 @@
             pending=JSON.stringify(state)!==JSON.stringify(sent);writeCache();report(pending?'pending':'saved');
           }
           if(pending)report('conflict');
-        }catch{writeCache();report(blocked?'conflict':'error');}
+        }catch{if(!disposed){writeCache();report(blocked?'conflict':'error');}}
       })();
       try{await flight;}finally{flight=null;}
     }
-    root.addEventListener('online',()=>{if(pending)void flush();else void session.sync().catch(()=>report('error'));});
-    root.addEventListener('focus',()=>{if(!pending&&!blocked)void session.sync().catch(()=>report('error'));});
-    root.addEventListener('beforeunload',event=>{if(pending){event.preventDefault();event.returnValue='';}});
-    root.addEventListener('storage',event=>{if(event.key===key||event.key===null){blocked=true;report('conflict');}});
-    client.auth.onAuthStateChange((event,auth)=>{
+    const handlers={
+      online:()=>{if(pending)void flush();else void session.sync().catch(()=>report(blocked?'conflict':'error'));},
+      focus:()=>{if(!pending&&!blocked)void session.sync().catch(()=>report(blocked?'conflict':'error'));},
+      beforeunload:event=>{if(pending){event.preventDefault();event.returnValue='';}},
+      storage:event=>{if(event.key===key||event.key===null){blocked=true;report('conflict');}}
+    };
+    for(const [event,fn] of Object.entries(handlers))root.addEventListener(event,fn);
+    const authSubscription=client.auth.onAuthStateChange((event,auth)=>{
       if(event!=='INITIAL_SESSION'&&auth?.user?.id!==user.id){blocked=true;report('conflict');}
     });
-    if(pending&&!blocked)timer=setTimeout(()=>void flush(),0);
+    if(cached){
+      void refresh().then(()=>{if(pending&&!blocked&&!disposed)void flush();}).catch(()=>{if(!disposed)report(blocked?'conflict':'error');});
+    }else{
+      try{await refresh();}catch{session.dispose();throw Error('云端进度暂时无法读取，请联网后重试；不会以空记录覆盖。');}
+    }
     return session;
   }
   root.ReaderCloud={client,ready,identity,open,merge,invited,mode:config.mode,account,get persistent(){return persistent;}};
