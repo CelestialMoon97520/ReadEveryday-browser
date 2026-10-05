@@ -200,6 +200,7 @@
       $('cloud-password-form').onsubmit=e=>{e.preventDefault();const field=$('cloud-new-password');void action(e.submitter,async()=>{const {error}=await cloud.client.auth.updateUser({password:field.value});field.value='';if(error)throw Error('密码未更新，请检查网络并使用至少 12 个字符。');notice.textContent='密码已设置；其他设备可用邮箱和密码登录。';});};
     }else $('cloud-login-form').onsubmit=e=>{e.preventDefault();void action(e.submitter,async()=>{
       if(database.pending)throw Error('访客记录尚未保存，请先重试或导出。');
+      if(!cloud.persistent)throw Error('此浏览器禁止网站存储，请允许此网站保存登录状态，或换一个浏览器再登录。');
       const field=$('cloud-login-password'),{error}=await cloud.client.auth.signInWithPassword({email:$('cloud-email').value.trim(),password:field.value});field.value='';
       if(error)throw Error('登录失败，请检查邮箱、密码或网络；新账号请先打开邀请链接。');
       location.reload();

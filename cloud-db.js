@@ -75,6 +75,13 @@
         articles.sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt));days.sort((a,b)=>b.day.localeCompare(a.day));return {articles,days};
       },
       async logout(){clearTimeout(timer);if(pending){await flush();if(pending)throw Error('还有未同步记录，请先重试或导出，再退出账号。');}
+        try{
+          for(let i=0;i<localStorage.length;i++){
+            const k=localStorage.key(i);
+            if(k?.startsWith('read-everyday-cloud-v1:'+user.id+':')&&JSON.parse(localStorage.getItem(k)).pending)
+              throw Error('其他文章还有未同步记录，请先回到该文章重试或导出，再退出账号。');
+          }
+        }catch(error){throw Error(error.message.includes('其他文章')?error.message:'浏览器副本无法检查，请保留数据并确认其他文章已同步后再退出。');}
         const {error}=await client.auth.signOut({scope:'local'});if(error)throw Error('退出失败，请重试');
         // Remove only this account's site copies on explicit logout (shared-device privacy).
         try{for(let i=localStorage.length-1;i>=0;i--){const k=localStorage.key(i);if(k?.startsWith('read-everyday-cloud-v1:'+user.id+':'))localStorage.removeItem(k);}}catch{}
