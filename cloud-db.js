@@ -34,7 +34,30 @@
     return core.validate({...core.merge(remote,local),saved,index:local.index!==base.index?local.index:remote.index,large:local.large!==base.large?local.large:remote.large});
   }
   async function identity(){const {data,error}=await client.auth.getSession();if(error)throw Error('账户连接失败');return data.session?.user||null;}
-  async function account(action,username,password,confirmPassword,activationCode){
+  let turnstileLoading;
+  async function mountCaptcha(container,action){
+    const response=await fetch(config.url+'/functions/v1/reader-account',{headers:{apikey:config.publishableKey},signal:AbortSignal.timeout(10000)});
+    if(!response.ok)throw Error('安全验证暂时无法加载，请稍后重新打开登录窗口。');
+    const meta=await response.json();if(!meta.captcha){container.hidden=true;return {token:undefined,dispose(){},reset(){}};}
+    if(meta.captcha.provider!=='turnstile'||!meta.captcha.siteKey)throw Error('安全验证配置不可用，请稍后重试。');
+    if(!root.turnstile){
+      turnstileLoading??=new Promise((resolve,reject)=>{
+        const script=document.createElement('script');script.src='https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';script.async=true;
+        const timeout=setTimeout(()=>{script.remove();turnstileLoading=null;reject(Error('安全验证加载超时，请检查网络后重试。'));},15000);
+        script.onload=()=>{clearTimeout(timeout);resolve();};script.onerror=()=>{clearTimeout(timeout);script.remove();turnstileLoading=null;reject(Error('安全验证无法加载，请检查网络后重试。'));};
+        document.head.append(script);
+      });
+      await turnstileLoading;
+    }
+    if(!container.isConnected)return {dispose(){},reset(){}};
+    let token='',disposed=false;
+    container.textContent='';
+    const widget=root.turnstile.render(container,{sitekey:meta.captcha.siteKey,action,theme:'auto',size:'compact',language:'zh-cn',
+      callback:value=>{if(!disposed)token=value;},'expired-callback':()=>{token='';},'error-callback':()=>{token='';}});
+    return {get token(){if(!token)throw Error('请等待安全验证完成，再提交。');return token;},
+      reset(){if(!disposed){token='';root.turnstile.reset(widget);}},dispose(){if(!disposed){disposed=true;token='';root.turnstile.remove(widget);}}};
+  }
+  async function account(action,username,password,confirmPassword,activationCode,captchaToken){
     if(!persistent)throw Error('此浏览器禁止网站存储，请允许此网站保存登录状态，或换一个浏览器再登录。');
     if(typeof username!=='string'||!username||[...username].length>64||username!==username.trim()||/[\u0000-\u001f\u007f]/.test(username))
       throw Error('账号需要 1–64 个字符，首尾不能有空格。');
@@ -45,7 +68,7 @@
     if(action==='register'&&!/^RD-(?:[A-Z2-7]{4}-){7}[A-Z2-7]{4}$/.test(code))throw Error('注册需要有效的激活码，请向管理员领取。');
     let response,value;
     try{response=await fetch(config.url+'/functions/v1/reader-account',{method:'POST',headers:{'Content-Type':'application/json',apikey:config.publishableKey},
-      body:JSON.stringify({action,username,password,...(action==='register'?{confirmPassword,activationCode:code}:{} )}),signal:AbortSignal.timeout(20000)});value=await response.json();}
+      body:JSON.stringify({action,username,password,...(action==='register'?{confirmPassword,activationCode:code}:{} ),...(captchaToken?{captchaToken}:{})}),signal:AbortSignal.timeout(25000)});value=await response.json();}
     catch{throw Error('连接失败，请检查网络后重试。');}
     if(!response.ok)throw Error(value.message||'账号操作失败，请稍后重试。');
     if(action==='login'){
@@ -57,7 +80,7 @@
   async function open(data,core,list,user){
     activeOwner=user.id;
     const key='read-everyday-cloud-v1:'+user.id+':'+data.id;
-    let state=core.blank(),base=core.blank(),revision=0,pending=false,status='checking',cacheOK=true,listener=()=>{},blocked=false,flight=null,refreshFlight=null,timer,disposed=false;
+    let state=core.blank(),base=core.blank(),revision=0,pending=false,status='checking',cacheOK=true,listener=()=>{},blocked=false,flight=null,refreshFlight=null,timer,disposed=false,retryAt=0;
     const cached=storage.getItem(key);
     if(cached){
       try{const record=JSON.parse(cached);if(record.version!==1||!Number.isSafeInteger(record.revision)||record.revision<0)throw Error();
@@ -148,13 +171,18 @@
     async function flush(){
       clearTimeout(timer);if(refreshFlight){try{await refreshFlight;}catch{}}
       if(disposed)return;if(flight)return flight;if(blocked){report('conflict');return;}
+      if(Date.now()<retryAt){report('limited');timer=setTimeout(()=>void flush(),retryAt-Date.now()+100);return;}
       flight=(async()=>{
         try{
           for(let attempt=0;pending&&!disposed&&attempt<8;attempt++){
             await guard();if(disposed)return;const sent=clone(state),sentBase=clone(base),expected=revision;report('saving');
             const {data:reply,error}=await client.rpc('save_reader_progress',{p_article_id:data.id,p_expected_revision:expected,p_state:sent});
             if(disposed)return;
-            if(error?.code==='P0001'&&error.message==='READER_STORAGE_QUOTA_EXCEEDED'){writeCache();report('quota');return;}
+            if((error?.code==='P0001'&&error.message==='READER_STORAGE_QUOTA_EXCEEDED')||reply?.status==='quota_exceeded'){writeCache();report('quota');return;}
+            if(!error&&['rate_limited','paused'].includes(reply?.status)){
+              retryAt=Date.now()+Math.min(300,Math.max(1,Number(reply.retry_after)||60))*1000;
+              writeCache();report(reply.status==='paused'?'paused':'limited');timer=setTimeout(()=>void flush(),retryAt-Date.now()+100);return;
+            }
             if(error||!reply||!['saved','conflict'].includes(reply.status))throw Error('云端保存失败');
             if(reply.status==='conflict'){
               const remote=reply.row?core.validate(reply.row.state):core.blank();
@@ -185,5 +213,5 @@
     }
     return session;
   }
-  root.ReaderCloud={client,ready,identity,open,merge,invited,mode:config.mode,account,get persistent(){return persistent;}};
+  root.ReaderCloud={client,ready,identity,open,merge,invited,mode:config.mode,account,mountCaptcha,get persistent(){return persistent;}};
 })(globalThis);

@@ -8,6 +8,9 @@
   let data=database?database.data:window.READ_DATA,core=ReadCore.create(data);
   let STORAGE=database?'read-everyday-db-backup:'+data.id:'read-everyday-v1'+(new URLSearchParams(location.search).get('qa')==='1'?'-qa':'');
   const wordDialog=$('word-dialog'),panelDialog=$('panel-dialog');
+  let accountCaptcha=null,accountCaptchaTicket=0,accountCaptchaReady=false;
+  function clearAccountCaptcha(){accountCaptchaTicket++;accountCaptcha?.dispose();accountCaptcha=null;accountCaptchaReady=false;}
+  panelDialog.addEventListener('close',clearAccountCaptcha);
   let state=core.blank(),storageOK=true,activeWord=null,toastTimer,dialogBackPending=false,stopped=false;
   let initialNotice='',switching=false,historyRequest=0,sessionOperations=0,queuedArticle=null;
   try { if(database)state=database.state;else{const raw=localStorage.getItem(STORAGE);if(raw)state=core.validate(JSON.parse(raw));} }
@@ -18,7 +21,7 @@
   function toast(text){$('toast').textContent=text;$('toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').hidden=true,3500);}
   function save(){if(stopped)return;if(!isBrowser){try{localStorage.setItem(STORAGE,JSON.stringify(state));storageOK=true;}catch{storageOK=false;}}if(database)database.save(state);updateStorageLabel();}
   function updateStorageLabel(){
-    if(database){const labels=database.cloud?{checking:'已恢复浏览器副本 · 正在核对云端进度…',saved:'已保存到账号 · 可跨设备接续',saving:'正在同步到账号…',pending:'有待同步记录',quota:'账号云保存量已达 15 MiB · 未同步记录已保留，请在设置中导出备份',error:'云端连接失败 · 设置中可重试或导出',conflict:'记录或账号有变化 · 请在设置中重试或导出'}:isBrowser?{saved:'已保存到此浏览器',saving:'正在保存…',pending:'有待保存记录',error:'浏览器保存失败 · 设置中可重试或导出',conflict:'另一页面更新了记录 · 设置中可合并并重试'}:{saved:'已保存到本机个人数据库',saving:'正在保存到本机数据库…',pending:'有待保存记录',error:'数据库保存失败 · 请勿关闭，设置中可重试或导出',conflict:'另一页面更新了记录 · 设置中可合并并重试'};$('storage-status').textContent=labels[database.status]+(storageOK?'':' · 浏览器副本不可用');return;}
+    if(database){const labels=database.cloud?{checking:'已恢复浏览器副本 · 正在核对云端进度…',saved:'已保存到账号 · 可跨设备接续',saving:'正在同步到账号…',pending:'有待同步记录',limited:'同步稍后自动继续 · 待同步记录已保留',paused:'云保存暂时暂停 · 待同步记录已保留，可导出备份',quota:'账号云保存量已达 15 MiB · 未同步记录已保留，请在设置中导出备份',error:'云端连接失败 · 设置中可重试或导出',conflict:'记录或账号有变化 · 请在设置中重试或导出'}:isBrowser?{saved:'已保存到此浏览器',saving:'正在保存…',pending:'有待保存记录',error:'浏览器保存失败 · 设置中可重试或导出',conflict:'另一页面更新了记录 · 设置中可合并并重试'}:{saved:'已保存到本机个人数据库',saving:'正在保存到本机数据库…',pending:'有待保存记录',error:'数据库保存失败 · 请勿关闭，设置中可重试或导出',conflict:'另一页面更新了记录 · 设置中可合并并重试'};$('storage-status').textContent=labels[database.status]+(storageOK?'':' · 浏览器副本不可用');return;}
     $('storage-status').textContent=storageOK?'浏览器模式 · 未接入本机数据库':'浏览器未允许保存进度 · 可在设置中导出备份';
   }
   function subscribeDatabase(){const target=database;target?.subscribe((status,cacheOK,updated)=>{if(target!==database)return;storageOK=cacheOK;if(updated){state=core.validate(updated);render();}else updateStorageLabel();});}
@@ -232,6 +235,7 @@
     if(!panelDialog.open)modal(panelDialog);
   }
   function accountPanel(mode='login',username='',message=''){
+    clearAccountCaptcha();
     const cloud=window.ReaderCloud;
     if(!cloud)return;
     $('panel-title').textContent=database.cloud?'阅读账号':'登录阅读账号';
@@ -258,18 +262,32 @@
     }else{
       function select(tab,retainedName='',success=''){
         if(busy)return;
+        clearAccountCaptcha();
         section.querySelectorAll('[role="tab"]').forEach(button=>{const selected=button.id==='account-tab-'+tab;button.setAttribute('aria-selected',selected);button.tabIndex=selected?0:-1;});
         const pane=$('account-pane');pane.setAttribute('aria-labelledby','account-tab-'+tab);notice.textContent=success;
         if(tab==='forgot'){pane.innerHTML='<p class="account-help">找回密码暂未开放。忘记密码请联系管理员协助重置。</p>';return;}
         const registering=tab==='register';
         pane.innerHTML=`<p class="account-help">${registering?'注册需管理员提供的一次性激活码，已有账号登录不需要。账号和密码区分大小写，密码至少 6 个字符。':'用你的阅读账号接着读，账号和密码都区分大小写。'}</p><form id="account-form" class="account-form"><label for="account-username">账号</label><input id="account-username" type="text" required maxlength="64" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false"><label for="account-password">密码</label><input id="account-password" type="password" required minlength="6" maxlength="72" autocomplete="${registering?'new-password':'current-password'}" autocapitalize="none">${registering?'<label for="account-confirm-password">确认密码</label><input id="account-confirm-password" type="password" required minlength="6" maxlength="72" autocomplete="new-password" autocapitalize="none"><label for="account-activation-code">激活码</label><input id="account-activation-code" type="text" required maxlength="64" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" placeholder="粘贴管理员提供的完整激活码">':''}<button class="primary-button" type="submit">${registering?'注册':'登录'}</button></form>`;
         $('account-username').value=retainedName;
+        if(cloud.mountCaptcha){
+          const container=document.createElement('div');container.className='account-captcha';container.setAttribute('aria-label','账号安全验证');container.textContent='正在加载安全验证…';
+          $('account-form').insertBefore(container,$('account-form').querySelector('button'));
+          const ticket=accountCaptchaTicket;
+          void cloud.mountCaptcha(container,tab).then(widget=>{
+            if(ticket!==accountCaptchaTicket){widget.dispose();return;}
+            accountCaptcha=widget;accountCaptchaReady=true;
+          }).catch(error=>{if(ticket===accountCaptchaTicket){container.textContent=error.message||'安全验证加载失败，请重新打开登录窗口。';}});
+        }else accountCaptchaReady=true;
         $('account-form').onsubmit=e=>{
           e.preventDefault();const accountName=$('account-username').value,password=$('account-password'),confirmation=$('account-confirm-password');
+          const widget=accountCaptcha;
           void action(async()=>{
             try{
               if(!registering&&database.pending)throw Error('访客记录尚未保存，请先在设置中重试或导出。');
-              if(cloud.mode==='username')await cloud.account(tab,accountName,password.value,confirmation?.value,$('account-activation-code')?.value);
+              if(cloud.mode==='username'){
+                if(!accountCaptchaReady)throw Error('请等待安全验证加载完成，再提交。');
+                await cloud.account(tab,accountName,password.value,confirmation?.value,$('account-activation-code')?.value,widget?.token);
+              }
               else{
                 if(registering)throw Error('此版本使用邀请制，请联系管理员。');
                 if(!cloud.persistent)throw Error('请允许此网站保存登录状态后再登录。');
@@ -277,7 +295,7 @@
               }
               if(registering){busy=false;select('login',accountName,'注册成功，请登录。');}
               else location.reload();
-            }finally{password.value='';if(confirmation)confirmation.value='';}
+            }finally{password.value='';if(confirmation)confirmation.value='';widget?.reset();}
           });
         };
       }
