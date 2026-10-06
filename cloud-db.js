@@ -154,6 +154,7 @@
             await guard();if(disposed)return;const sent=clone(state),sentBase=clone(base),expected=revision;report('saving');
             const {data:reply,error}=await client.rpc('save_reader_progress',{p_article_id:data.id,p_expected_revision:expected,p_state:sent});
             if(disposed)return;
+            if(error?.code==='P0001'&&error.message==='READER_STORAGE_QUOTA_EXCEEDED'){writeCache();report('quota');return;}
             if(error||!reply||!['saved','conflict'].includes(reply.status))throw Error('云端保存失败');
             if(reply.status==='conflict'){
               const remote=reply.row?core.validate(reply.row.state):core.blank();
