@@ -32,4 +32,10 @@ dialog{color:var(--ink);background:var(--white);border:1px solid var(--line);bor
 .account-form input{box-sizing:border-box;width:100%;min-width:0;border:1px solid #b8b0a2;border-radius:10px;padding:12px;background:#fff;color:inherit;font:inherit}
 .account-form button{justify-self:start}
 .account-form label{font-size:13px;color:var(--ink)}
+.device-management:empty{display:none}
+.device-management,.device-recovery{border-top:1px solid var(--line);margin-top:20px;padding-top:12px}
+.device-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-bottom:1px solid var(--line)}
+.device-row>div{min-width:0;overflow-wrap:anywhere}
+.device-row button{flex-shrink:0}
+.device-list{margin-bottom:14px}
 @media(max-width:440px){.account-tabs button{padding:10px 12px}.header-actions{gap:1px}}

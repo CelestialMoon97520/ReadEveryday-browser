@@ -12,7 +12,7 @@
   function clearAccountCaptcha(){accountCaptchaTicket++;accountCaptcha?.dispose();accountCaptcha=null;accountCaptchaReady=false;}
   panelDialog.addEventListener('close',clearAccountCaptcha);
   let state=core.blank(),storageOK=true,activeWord=null,toastTimer,dialogBackPending=false,stopped=false;
-  let initialNotice='',switching=false,historyRequest=0,sessionOperations=0,queuedArticle=null;
+  let initialNotice=window.ReaderCloud?.revoked?'此浏览器登录已下线，请重新登录；原浏览器副本仍保留。':'',switching=false,historyRequest=0,sessionOperations=0,queuedArticle=null;
   try { if(database)state=database.state;else{const raw=localStorage.getItem(STORAGE);if(raw)state=core.validate(JSON.parse(raw));} }
   catch(error){if(error instanceof SyntaxError||error.message.includes('无效')||error.message.includes('词条')||error.message.includes('文件'))initialNotice='保存的进度无法读取，已从第一句开始。';else storageOK=false;}
   const escape=text=>String(text).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -21,7 +21,7 @@
   function toast(text){$('toast').textContent=text;$('toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').hidden=true,3500);}
   function save(){if(stopped)return;if(!isBrowser){try{localStorage.setItem(STORAGE,JSON.stringify(state));storageOK=true;}catch{storageOK=false;}}if(database)database.save(state);updateStorageLabel();}
   function updateStorageLabel(){
-    if(database){const labels=database.cloud?{checking:'已恢复浏览器副本 · 正在核对云端进度…',saved:'已保存到账号 · 可跨设备接续',saving:'正在同步到账号…',pending:'有待同步记录',limited:'同步稍后自动继续 · 待同步记录已保留',paused:'云保存暂时暂停 · 待同步记录已保留，可导出备份',quota:'账号云保存量已达 15 MiB · 未同步记录已保留，请在设置中导出备份',error:'云端连接失败 · 设置中可重试或导出',conflict:'记录或账号有变化 · 请在设置中重试或导出'}:isBrowser?{saved:'已保存到此浏览器',saving:'正在保存…',pending:'有待保存记录',error:'浏览器保存失败 · 设置中可重试或导出',conflict:'另一页面更新了记录 · 设置中可合并并重试'}:{saved:'已保存到本机个人数据库',saving:'正在保存到本机数据库…',pending:'有待保存记录',error:'数据库保存失败 · 请勿关闭，设置中可重试或导出',conflict:'另一页面更新了记录 · 设置中可合并并重试'};$('storage-status').textContent=labels[database.status]+(storageOK?'':' · 浏览器副本不可用');return;}
+    if(database){const labels=database.cloud?{checking:'已恢复浏览器副本 · 正在核对云端进度…',saved:'已保存到账号 · 可跨设备接续',saving:'正在同步到账号…',pending:'有待同步记录',limited:'同步稍后自动继续 · 待同步记录已保留',revoked:'此浏览器登录已下线 · 未同步记录保留，可导出或重新登录',paused:'云保存暂时暂停 · 待同步记录已保留，可导出备份',quota:'账号云保存量已达 15 MiB · 未同步记录已保留，请在设置中导出备份',error:'云端连接失败 · 设置中可重试或导出',conflict:'记录或账号有变化 · 请在设置中重试或导出'}:isBrowser?{saved:'已保存到此浏览器',saving:'正在保存…',pending:'有待保存记录',error:'浏览器保存失败 · 设置中可重试或导出',conflict:'另一页面更新了记录 · 设置中可合并并重试'}:{saved:'已保存到本机个人数据库',saving:'正在保存到本机数据库…',pending:'有待保存记录',error:'数据库保存失败 · 请勿关闭，设置中可重试或导出',conflict:'另一页面更新了记录 · 设置中可合并并重试'};$('storage-status').textContent=labels[database.status]+(storageOK?'':' · 浏览器副本不可用');return;}
     $('storage-status').textContent=storageOK?'浏览器模式 · 未接入本机数据库':'浏览器未允许保存进度 · 可在设置中导出备份';
   }
   function subscribeDatabase(){const target=database;target?.subscribe((status,cacheOK,updated)=>{if(target!==database)return;storageOK=cacheOK;if(updated){state=core.validate(updated);render();}else updateStorageLabel();});}
@@ -238,22 +238,52 @@
     clearAccountCaptcha();
     const cloud=window.ReaderCloud;
     if(!cloud)return;
-    $('panel-title').textContent=database.cloud?'阅读账号':'登录阅读账号';
+    const signed=database.cloud&&database.status!=='revoked';
+    $('panel-title').textContent=signed?'阅读账号':'登录阅读账号';
     $('panel-content').replaceChildren();
     const section=document.createElement('section');section.className='account-panel';
-    if(database.cloud){
+    if(signed){
       section.innerHTML=`<p class="panel-intro"><strong>${escape(database.user.user_metadata?.reader_username||database.user.email||'已登录')}</strong> · 进度与词本可跨设备接续。</p><div class="account-actions"><button id="cloud-refresh" class="secondary-button">刷新云端记录</button><button id="cloud-logout" class="secondary-button">退出账号</button></div><form id="cloud-password-form" class="account-form"><label for="cloud-new-password">${cloud.invited?'首次使用，请设置登录密码':'修改密码'}</label><input id="cloud-new-password" type="password" minlength="6" maxlength="72" required autocomplete="new-password" autocapitalize="none" placeholder="至少 6 个字符，区分大小写"><button class="secondary-button" type="submit">保存密码</button></form>`;
     }else{
       section.innerHTML='<div class="account-tabs" role="tablist" aria-label="账号操作"><button type="button" role="tab" id="account-tab-login" aria-controls="account-pane">登录</button><button type="button" role="tab" id="account-tab-register" aria-controls="account-pane">注册</button><button type="button" role="tab" id="account-tab-forgot" aria-controls="account-pane">找回密码</button></div><div id="account-pane" role="tabpanel"></div>';
     }
     const notice=document.createElement('p');notice.className='account-notice';notice.setAttribute('role','status');notice.setAttribute('aria-live','polite');section.append(notice);$('panel-content').append(section);
+    function drawDevices(host,info,ticket){
+      if(!host.isConnected)return;
+      const devices=Array.isArray(info.devices)?info.devices:[];
+      host.innerHTML=`<h3>登录设备管理</h3><p class="account-help">已使用 ${devices.length} / 5 个浏览器登录名额。刷新、开多个标签页不重复占用；关闭网页不会退出登录。</p><div class="device-list"></div><div class="account-actions"><button type="button" class="secondary-button device-others">${ticket?'退出全部旧登录':'退出其他登录'}</button></div>`;
+      const date=value=>{const d=new Date(value);return Number.isNaN(d.getTime())?'未知时间':d.toLocaleString('zh-CN');};
+      for(const device of devices){
+        const row=document.createElement('div');row.className='device-row';
+        row.innerHTML=`<div><strong>${escape(device.label||'浏览器')}${device.current?' · 当前登录':''}</strong><p class="account-help">登录：${escape(date(device.createdAt))}<br>最近访问：${escape(date(device.lastSeenAt))}</p></div><button type="button" class="secondary-button">${device.current?'退出当前登录':'下线'}</button>`;
+        row.querySelector('button').onclick=()=>action(async()=>{
+          if(device.current){await database.logout();location.reload();return;}
+          const next=ticket?await cloud.manageDevices(ticket,'remove',device.id):await cloud.devices('remove',device.id);
+          drawDevices(host,next,ticket);notice.textContent=ticket?'名额已释放，请重新输入密码并完成安全验证后登录。':'该浏览器已下线，登录名额已释放。';
+        });host.querySelector('.device-list').append(row);
+      }
+      const others=host.querySelector('.device-others');others.disabled=!devices.some(d=>!d.current);
+      others.onclick=()=>action(async()=>{
+        const next=ticket?await cloud.manageDevices(ticket,'all'):await cloud.devices('others');
+        drawDevices(host,next,ticket);notice.textContent=ticket?'旧登录已退出，请重新输入密码并完成安全验证后登录。':'其他浏览器已全部下线，当前登录保留。';
+      });
+    }
     let busy=false;
     async function action(fn){
       if(busy)return;busy=true;sessionOperations++;section.querySelectorAll('button').forEach(b=>b.disabled=true);notice.textContent='正在处理…';
-      try{await fn();}catch(error){notice.textContent=error.message||'操作失败，请稍后重试。';}
+      try{await fn();}catch(error){notice.textContent=error.message||'操作失败，请稍后重试。';
+        if(error.deviceLimit&&!signed){
+          section.querySelector('.device-recovery')?.remove();const host=document.createElement('section');host.className='device-recovery';
+          section.append(host);drawDevices(host,error.deviceLimit,error.deviceLimit.managementToken);
+        }
+      }
       finally{busy=false;sessionOperations--;section.querySelectorAll('button').forEach(b=>b.disabled=false);}
     }
-    if(database.cloud){
+    if(signed){
+      const manage=document.createElement('button');manage.className='secondary-button';manage.textContent='管理登录设备';manage.type='button';
+      $('cloud-logout').parentElement.append(manage);
+      const deviceHost=document.createElement('section');deviceHost.className='device-management';section.append(deviceHost);
+      manage.onclick=()=>action(async()=>{drawDevices(deviceHost,await cloud.devices());notice.textContent='可以让不再使用的浏览器下线，释放登录名额。';});
       $('cloud-refresh').onclick=()=>action(async()=>{state=core.validate(await database.sync());render();notice.textContent=database.status==='saved'?'云端记录已更新。':'仍有待同步记录，请重试或导出。';});
       $('cloud-logout').onclick=()=>action(async()=>{await database.logout();location.reload();});
       $('cloud-password-form').onsubmit=e=>{e.preventDefault();const field=$('cloud-new-password');void action(async()=>{
@@ -263,6 +293,7 @@
       function select(tab,retainedName='',success=''){
         if(busy)return;
         clearAccountCaptcha();
+        section.querySelector('.device-recovery')?.remove();
         section.querySelectorAll('[role="tab"]').forEach(button=>{const selected=button.id==='account-tab-'+tab;button.setAttribute('aria-selected',selected);button.tabIndex=selected?0:-1;});
         const pane=$('account-pane');pane.setAttribute('aria-labelledby','account-tab-'+tab);notice.textContent=success;
         if(tab==='forgot'){pane.innerHTML='<p class="account-help">找回密码暂未开放。忘记密码请联系管理员协助重置。</p>';return;}
@@ -283,7 +314,7 @@
           const widget=accountCaptcha;
           void action(async()=>{
             try{
-              if(!registering&&database.pending)throw Error('访客记录尚未保存，请先在设置中重试或导出。');
+              if(!registering&&!database.cloud&&database.pending)throw Error('访客记录尚未保存，请先在设置中重试或导出。');
               if(cloud.mode==='username'){
                 if(!accountCaptchaReady)throw Error('请等待安全验证加载完成，再提交。');
                 await cloud.account(tab,accountName,password.value,confirmation?.value,$('account-activation-code')?.value,widget?.token);

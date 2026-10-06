@@ -4,7 +4,7 @@
   const config=root.READEVERYDAY_CLOUD;
   if(!config||!root.ReaderSupabase)return;
   const clone=value=>JSON.parse(JSON.stringify(value)),memory=new Map();
-  let persistent=true,activeOwner=null;
+  let persistent=true,activeOwner=null,boundSession=null,bindFlight=null,revoked=false;
   const storage={
     getItem(key){try{return localStorage.getItem(key);}catch{persistent=false;return memory.get(key)??null;}},
     setItem(key,value){memory.set(key,value);try{localStorage.setItem(key,value);}catch{persistent=false;}},
@@ -33,7 +33,45 @@
     const saved=[...new Map([...b,...c]).entries()].filter(([key])=>!a.has(key)||(b.has(key)&&c.has(key))).map(([,v])=>v);
     return core.validate({...core.merge(remote,local),saved,index:local.index!==base.index?local.index:remote.index,large:local.large!==base.large?local.large:remote.large});
   }
-  async function identity(){const {data,error}=await client.auth.getSession();if(error)throw Error('账户连接失败');return data.session?.user||null;}
+  async function browserKey(){
+    const load=()=>{
+      const name='read-everyday-browser-key-v1';let key=storage.getItem(name);
+      if(!/^[0-9a-f]{64}$/.test(key||'')){key=[...root.crypto.getRandomValues(new Uint8Array(32))].map(v=>v.toString(16).padStart(2,'0')).join('');storage.setItem(name,key);}
+      if(!persistent)throw Error('请允许此网站保存登录状态后再登录。');return key;
+    };
+    return root.navigator?.locks?root.navigator.locks.request('read-everyday-browser-key-v1',load):load();
+  }
+  function browserLabel(){
+    const agent=root.navigator?.userAgent||'';
+    const platform=/iPad|Tablet/i.test(agent)?'平板':/Android|iPhone|Mobile/i.test(agent)?'手机':/Windows|Macintosh|Linux/i.test(agent)?'电脑':'浏览器';
+    const browser=/VivoBrowser/i.test(agent)?'vivo 浏览器':/Edg/i.test(agent)?'Edge':/Firefox/i.test(agent)?'Firefox':/Chrome|CriOS/i.test(agent)?'Chrome':/Safari/i.test(agent)?'Safari':'浏览器';
+    return platform+' · '+browser;
+  }
+  async function devices(action='list',target){
+    const {data,error}=await client.rpc('reader_devices',{p_action:action,...(target?{p_target:target}:{}),
+      ...(action==='bind'?{p_browser_key:await browserKey(),p_label:browserLabel()}:{} )});
+    if(error)throw Error('登录设备暂时无法读取，请检查网络后重试。');
+    if(data?.status==='revoked'){revoked=true;throw Error('此浏览器登录已下线，请重新登录；未同步记录仍保留。');}
+    if(data?.status!=='ok')throw Error('设备管理失败，请稍后重试。');return data;
+  }
+  async function identity(){
+    const {data,error}=await client.auth.getSession();if(error)throw Error('账户连接失败');
+    const session=data.session;if(!session?.user)return null;
+    let id;try{id=JSON.parse(atob(session.access_token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'))).session_id;}catch{id=session.user.id;}
+    if(boundSession!==id){
+      bindFlight??=devices(persistent?'bind':'list').then(()=>{boundSession=id;revoked=false;}).finally(()=>{bindFlight=null;});
+      try{await bindFlight;}catch(error){if(revoked)return null;throw error;}
+    }
+    return session.user;
+  }
+  async function manageDevices(managementToken,operation='list',target){
+    let response,value;try{
+      response=await fetch(config.url+'/functions/v1/reader-account',{method:'POST',headers:{'Content-Type':'application/json',apikey:config.publishableKey},
+        body:JSON.stringify({action:'manage',managementToken,operation,...(target?{target}:{} )}),signal:AbortSignal.timeout(25000)});
+      value=await response.json();
+    }catch{throw Error('设备管理连接失败，请检查网络后重试。');}
+    if(!response.ok)throw Error(value.message||'设备管理失败，请重新登录验证。');return value;
+  }
   let turnstileLoading;
   async function mountCaptcha(container,action){
     const response=await fetch(config.url+'/functions/v1/reader-account',{headers:{apikey:config.publishableKey},signal:AbortSignal.timeout(10000)});
@@ -68,19 +106,19 @@
     if(action==='register'&&!/^RD-(?:[A-Z2-7]{4}-){7}[A-Z2-7]{4}$/.test(code))throw Error('注册需要有效的激活码，请向管理员领取。');
     let response,value;
     try{response=await fetch(config.url+'/functions/v1/reader-account',{method:'POST',headers:{'Content-Type':'application/json',apikey:config.publishableKey},
-      body:JSON.stringify({action,username,password,...(action==='register'?{confirmPassword,activationCode:code}:{} ),...(captchaToken?{captchaToken}:{})}),signal:AbortSignal.timeout(25000)});value=await response.json();}
+      body:JSON.stringify({action,username,password,...(action==='login'?{browserKey:await browserKey()}:{}),...(action==='register'?{confirmPassword,activationCode:code}:{} ),...(captchaToken?{captchaToken}:{})}),signal:AbortSignal.timeout(25000)});value=await response.json();}
     catch{throw Error('连接失败，请检查网络后重试。');}
-    if(!response.ok)throw Error(value.message||'账号操作失败，请稍后重试。');
+    if(!response.ok){const error=Error(value.message||'账号操作失败，请稍后重试。');if(value.code==='device_limit')error.deviceLimit=value;throw error;}
     if(action==='login'){
       if(!value.session?.access_token||!value.session?.refresh_token)throw Error('登录未完成，请稍后重试。');
-      const {error}=await client.auth.setSession(value.session);if(error)throw Error('登录状态未保存，请稍后重试。');
+      const {error}=await client.auth.setSession(value.session);if(error)throw Error('登录状态未保存，请稍后重试。');boundSession=null;revoked=false;
     }
     return value;
   }
   async function open(data,core,list,user){
     activeOwner=user.id;
     const key='read-everyday-cloud-v1:'+user.id+':'+data.id;
-    let state=core.blank(),base=core.blank(),revision=0,pending=false,status='checking',cacheOK=true,listener=()=>{},blocked=false,flight=null,refreshFlight=null,timer,disposed=false,retryAt=0;
+    let state=core.blank(),base=core.blank(),revision=0,pending=false,status='checking',cacheOK=true,listener=()=>{},blocked=false,sessionRevoked=false,flight=null,refreshFlight=null,timer,disposed=false,retryAt=0;
     const cached=storage.getItem(key);
     if(cached){
       try{const record=JSON.parse(cached);if(record.version!==1||!Number.isSafeInteger(record.revision)||record.revision<0)throw Error();
@@ -93,11 +131,17 @@
       catch{cacheOK=false;}
     }
     function report(value,changed=false){status=value;listener(value,cacheOK,changed?clone(state):undefined);}
-    async function guard(){if((await identity())?.id!==user.id){blocked=true;throw Error('账户已切换，请先导出此页的未同步记录。');}}
+    const blockedStatus=()=>sessionRevoked?'revoked':blocked?'conflict':'error';
+    async function guard(){
+      if((await identity())?.id!==user.id){blocked=true;throw Error('账户已切换，请先导出此页的未同步记录。');}
+      const {data:active,error}=await client.rpc('reader_session_active');
+      if(error)throw Error('登录状态暂时无法核对。');
+      if(active!==true){sessionRevoked=true;revoked=true;blocked=true;report('revoked');throw Error('此浏览器登录已下线，请重新登录；未同步记录仍保留。');}
+    }
     async function load(){
       await guard();
       const {data:rows,error}=await client.from('reader_progress').select('state,revision,updated_at').eq('article_id',data.id).eq('user_id',user.id);
-      if(error)throw Error('云端读取失败');
+      if(error)throw Error('云端读取失败');await guard();
       const row=rows[0];return row?{...row,state:core.validate(row.state)}:{state:core.blank(),revision:0};
     }
     async function refresh(){
@@ -143,14 +187,14 @@
         for(const [event,fn] of Object.entries(handlers))root.removeEventListener(event,fn);
         authSubscription?.data?.subscription?.unsubscribe();
       },
-      save(value){if(disposed)return;state=core.validate(clone(value));pending=true;writeCache();report(blocked?'conflict':'pending');clearTimeout(timer);timer=setTimeout(()=>void flush(),250);},
+      save(value){if(disposed)return;state=core.validate(clone(value));pending=true;writeCache();report(blocked?blockedStatus():'pending');clearTimeout(timer);timer=setTimeout(()=>void flush(),250);},
       async retry(){if(blocked){await guard();blocked=false;}pending=true;await flush();return clone(state);},
       async sync(){if(pending)await flush();else await refresh();if(pending)await flush();return clone(state);},
       async catalog(){return list.map(({file,...meta})=>meta);},
       async history(options={}){
         if(options.cached)return summarize(cachedRows());
         await guard();const {data:rows,error}=await client.from('reader_progress').select('article_id,state,updated_at').eq('user_id',user.id);
-        if(error)throw Error('云端历史读取失败');
+        if(error)throw Error('云端历史读取失败');await guard();
         const combined=new Map(rows.map(row=>[row.article_id,row]));
         for(const row of cachedRows())if(row.pending)combined.set(row.article_id,row);
         return summarize([...combined.values()]);
@@ -170,7 +214,7 @@
     };
     async function flush(){
       clearTimeout(timer);if(refreshFlight){try{await refreshFlight;}catch{}}
-      if(disposed)return;if(flight)return flight;if(blocked){report('conflict');return;}
+      if(disposed)return;if(flight)return flight;if(blocked){report(blockedStatus());return;}
       if(Date.now()<retryAt){report('limited');timer=setTimeout(()=>void flush(),retryAt-Date.now()+100);return;}
       flight=(async()=>{
         try{
@@ -178,6 +222,7 @@
             await guard();if(disposed)return;const sent=clone(state),sentBase=clone(base),expected=revision;report('saving');
             const {data:reply,error}=await client.rpc('save_reader_progress',{p_article_id:data.id,p_expected_revision:expected,p_state:sent});
             if(disposed)return;
+            if(reply?.status==='revoked'){sessionRevoked=true;revoked=true;blocked=true;writeCache();report('revoked');return;}
             if((error?.code==='P0001'&&error.message==='READER_STORAGE_QUOTA_EXCEEDED')||reply?.status==='quota_exceeded'){writeCache();report('quota');return;}
             if(!error&&['rate_limited','paused'].includes(reply?.status)){
               retryAt=Date.now()+Math.min(300,Math.max(1,Number(reply.retry_after)||60))*1000;
@@ -192,13 +237,13 @@
             pending=JSON.stringify(state)!==JSON.stringify(sent);writeCache();report(pending?'pending':'saved');
           }
           if(pending)report('conflict');
-        }catch{if(!disposed){writeCache();report(blocked?'conflict':'error');}}
+        }catch{if(!disposed){writeCache();report(blockedStatus());}}
       })();
       try{await flight;}finally{flight=null;}
     }
     const handlers={
-      online:()=>{if(pending)void flush();else void session.sync().catch(()=>report(blocked?'conflict':'error'));},
-      focus:()=>{if(!pending&&!blocked)void session.sync().catch(()=>report(blocked?'conflict':'error'));},
+      online:()=>{if(pending)void flush();else void session.sync().catch(()=>report(blockedStatus()));},
+      focus:()=>{if(!pending&&!blocked)void session.sync().catch(()=>report(blockedStatus()));},
       beforeunload:event=>{if(pending){event.preventDefault();event.returnValue='';}},
       storage:event=>{if(event.key===key||event.key===null){blocked=true;report('conflict');}}
     };
@@ -207,11 +252,11 @@
       if(event!=='INITIAL_SESSION'&&auth?.user?.id!==user.id){blocked=true;report('conflict');}
     });
     if(cached){
-      void refresh().then(()=>{if(pending&&!blocked&&!disposed)void flush();}).catch(()=>{if(!disposed)report(blocked?'conflict':'error');});
+      void refresh().then(()=>{if(pending&&!blocked&&!disposed)void flush();}).catch(()=>{if(!disposed)report(blockedStatus());});
     }else{
       try{await refresh();}catch{session.dispose();throw Error('云端进度暂时无法读取，请联网后重试；不会以空记录覆盖。');}
     }
     return session;
   }
-  root.ReaderCloud={client,ready,identity,open,merge,invited,mode:config.mode,account,mountCaptcha,get persistent(){return persistent;}};
+  root.ReaderCloud={client,ready,identity,open,merge,invited,mode:config.mode,account,mountCaptcha,devices,manageDevices,get revoked(){return revoked;},get persistent(){return persistent;}};
 })(globalThis);
