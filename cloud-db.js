@@ -47,12 +47,29 @@
     const browser=/VivoBrowser/i.test(agent)?'vivo 浏览器':/Edg/i.test(agent)?'Edge':/Firefox/i.test(agent)?'Firefox':/Chrome|CriOS/i.test(agent)?'Chrome':/Safari/i.test(agent)?'Safari':'浏览器';
     return platform+' · '+browser;
   }
+  async function dataRequest(action,payload={},owner){
+    const {data,error}=await client.auth.getSession();const session=data?.session;
+    if(error||!session?.access_token||!session.user)throw Error('请重新登录；本地记录仍保留。');
+    if(owner&&session.user.id!==owner)throw Error('账户已切换；本页记录不会写入另一个账号。');
+    let subject;try{subject=JSON.parse(atob(session.access_token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'))).sub;}catch{}
+    if(subject!==session.user.id)throw Error('账户已切换；本页记录不会写入另一个账号。');
+    let response,value;try{
+      response=await fetch(config.url+'/functions/v1/reader-data',{method:'POST',
+        headers:{'Content-Type':'application/json',apikey:config.publishableKey,Authorization:'Bearer '+session.access_token},
+        body:JSON.stringify({action,...payload}),signal:AbortSignal.timeout(25000)});value=await response.json();
+    }catch{throw Error('云端连接失败；本地记录仍保留。');}
+    if(response.status===429)return {status:'rate_limited',retry_after:Math.min(300,Math.max(1,Number(value.retry_after)||60))};
+    if(value.status==='revoked'){revoked=true;return value;}
+    if(!response.ok)throw Error(value.message||'云端操作失败；本地记录仍保留。');return value;
+  }
+  function requireData(value){
+    if(value?.status==='revoked'){const error=Error('此浏览器登录已下线，请重新登录；未同步记录仍保留。');error.revoked=true;throw error;}
+    if(value?.status==='rate_limited'){const error=Error('云端请求过于频繁，请稍后重试；本地记录仍保留。');error.retryAfter=value.retry_after;throw error;}
+    if(value?.status!=='ok')throw Error('云端数据暂时无法读取；本地记录仍保留。');return value;
+  }
   async function devices(action='list',target){
-    const {data,error}=await client.rpc('reader_devices',{p_action:action,...(target?{p_target:target}:{}),
-      ...(action==='bind'?{p_browser_key:await browserKey(),p_label:browserLabel()}:{} )});
-    if(error)throw Error('登录设备暂时无法读取，请检查网络后重试。');
-    if(data?.status==='revoked'){revoked=true;throw Error('此浏览器登录已下线，请重新登录；未同步记录仍保留。');}
-    if(data?.status!=='ok')throw Error('设备管理失败，请稍后重试。');return data;
+    return requireData(await dataRequest('devices',{operation:action,...(target?{target}:{}),
+      ...(action==='bind'?{browserKey:await browserKey(),label:browserLabel()}:{} )}));
   }
   async function identity(){
     const {data,error}=await client.auth.getSession();if(error)throw Error('账户连接失败');
@@ -132,17 +149,20 @@
     }
     function report(value,changed=false){status=value;listener(value,cacheOK,changed?clone(state):undefined);}
     const blockedStatus=()=>sessionRevoked?'revoked':blocked?'conflict':'error';
+    function readFailure(error){
+      if(error?.revoked){sessionRevoked=true;revoked=true;blocked=true;report('revoked');return;}
+      if(error?.retryAfter&&!disposed){report('limited');clearTimeout(timer);
+        timer=setTimeout(()=>void session.sync().catch(readFailure),error.retryAfter*1000+100+Math.floor(Math.random()*500));return;}
+      if(!disposed)report(blockedStatus());
+    }
     async function guard(){
       if((await identity())?.id!==user.id){blocked=true;throw Error('账户已切换，请先导出此页的未同步记录。');}
-      const {data:active,error}=await client.rpc('reader_session_active');
-      if(error)throw Error('登录状态暂时无法核对。');
-      if(active!==true){sessionRevoked=true;revoked=true;blocked=true;report('revoked');throw Error('此浏览器登录已下线，请重新登录；未同步记录仍保留。');}
+      if(revoked){sessionRevoked=true;blocked=true;report('revoked');throw Error('此浏览器登录已下线，请重新登录；未同步记录仍保留。');}
     }
     async function load(){
       await guard();
-      const {data:rows,error}=await client.from('reader_progress').select('state,revision,updated_at').eq('article_id',data.id).eq('user_id',user.id);
-      if(error)throw Error('云端读取失败');await guard();
-      const row=rows[0];return row?{...row,state:core.validate(row.state)}:{state:core.blank(),revision:0};
+      let result;try{result=requireData(await dataRequest('read',{articleId:data.id},user.id));}catch(error){readFailure(error);throw error;}
+      await guard();const row=result.row;return row?{...row,state:core.validate(row.state)}:{state:core.blank(),revision:0};
     }
     async function refresh(){
       if(refreshFlight)return refreshFlight;
@@ -173,8 +193,8 @@
     function summarize(rows){
       const articles=[],days=[];
       for(const row of rows){const meta=list.find(a=>a.id===row.article_id);if(!meta)continue;
-        articles.push({articleId:meta.id,title:meta.title,source:meta.source,index:row.state.index,readCount:row.state.read.length,updatedAt:row.updated_at});
-        for(const [day,items] of Object.entries(row.state.days))days.push({articleId:meta.id,day,count:items.length});
+        articles.push({articleId:meta.id,title:meta.title,source:meta.source,index:row.state?.index??row.index,readCount:row.state?.read.length??row.read_count,updatedAt:row.updated_at});
+        for(const [day,items] of Object.entries(row.state?.days??row.days))days.push({articleId:meta.id,day,count:Array.isArray(items)?items.length:items});
       }
       articles.sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt));days.sort((a,b)=>b.day.localeCompare(a.day));return {articles,days};
     }
@@ -193,8 +213,7 @@
       async catalog(){return list.map(({file,...meta})=>meta);},
       async history(options={}){
         if(options.cached)return summarize(cachedRows());
-        await guard();const {data:rows,error}=await client.from('reader_progress').select('article_id,state,updated_at').eq('user_id',user.id);
-        if(error)throw Error('云端历史读取失败');await guard();
+        await guard();let result;try{result=requireData(await dataRequest('history',{},user.id));}catch(error){readFailure(error);throw error;}await guard();const rows=result.rows;
         const combined=new Map(rows.map(row=>[row.article_id,row]));
         for(const row of cachedRows())if(row.pending)combined.set(row.article_id,row);
         return summarize([...combined.values()]);
@@ -220,20 +239,20 @@
         try{
           for(let attempt=0;pending&&!disposed&&attempt<8;attempt++){
             await guard();if(disposed)return;const sent=clone(state),sentBase=clone(base),expected=revision;report('saving');
-            const {data:reply,error}=await client.rpc('save_reader_progress',{p_article_id:data.id,p_expected_revision:expected,p_state:sent});
+            const reply=await dataRequest('save',{articleId:data.id,expectedRevision:expected,state:sent},user.id);
             if(disposed)return;
             if(reply?.status==='revoked'){sessionRevoked=true;revoked=true;blocked=true;writeCache();report('revoked');return;}
-            if((error?.code==='P0001'&&error.message==='READER_STORAGE_QUOTA_EXCEEDED')||reply?.status==='quota_exceeded'){writeCache();report('quota');return;}
-            if(!error&&['rate_limited','paused'].includes(reply?.status)){
+            if(reply?.status==='quota_exceeded'){writeCache();report('quota');return;}
+            if(['rate_limited','paused'].includes(reply?.status)){
               retryAt=Date.now()+Math.min(300,Math.max(1,Number(reply.retry_after)||60))*1000;
               writeCache();report(reply.status==='paused'?'paused':'limited');timer=setTimeout(()=>void flush(),retryAt-Date.now()+100);return;
             }
-            if(error||!reply||!['saved','conflict'].includes(reply.status))throw Error('云端保存失败');
+            if(!reply||!['saved','conflict'].includes(reply.status))throw Error('云端保存失败');
             if(reply.status==='conflict'){
               const remote=reply.row?core.validate(reply.row.state):core.blank();
               state=merge(core,sentBase,state,remote);base=clone(remote);revision=reply.row?.revision||0;writeCache();report('pending',true);continue;
             }
-            const remote=core.validate(reply.row.state);base=clone(remote);revision=reply.row.revision;
+            const remote=core.validate(reply.row.state??sent);base=clone(remote);revision=reply.row.revision;
             pending=JSON.stringify(state)!==JSON.stringify(sent);writeCache();report(pending?'pending':'saved');
           }
           if(pending)report('conflict');
@@ -242,8 +261,8 @@
       try{await flight;}finally{flight=null;}
     }
     const handlers={
-      online:()=>{if(pending)void flush();else void session.sync().catch(()=>report(blockedStatus()));},
-      focus:()=>{if(!pending&&!blocked)void session.sync().catch(()=>report(blockedStatus()));},
+      online:()=>{if(pending)void flush();else void session.sync().catch(readFailure);},
+      focus:()=>{if(!pending&&!blocked)void session.sync().catch(readFailure);},
       beforeunload:event=>{if(pending){event.preventDefault();event.returnValue='';}},
       storage:event=>{if(event.key===key||event.key===null){blocked=true;report('conflict');}}
     };
@@ -252,7 +271,7 @@
       if(event!=='INITIAL_SESSION'&&auth?.user?.id!==user.id){blocked=true;report('conflict');}
     });
     if(cached){
-      void refresh().then(()=>{if(pending&&!blocked&&!disposed)void flush();}).catch(()=>{if(!disposed)report(blockedStatus());});
+      void refresh().then(()=>{if(pending&&!blocked&&!disposed)void flush();}).catch(readFailure);
     }else{
       try{await refresh();}catch{session.dispose();throw Error('云端进度暂时无法读取，请联网后重试；不会以空记录覆盖。');}
     }
