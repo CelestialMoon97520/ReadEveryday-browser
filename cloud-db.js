@@ -113,6 +113,7 @@
       reset(){if(!disposed){token='';root.turnstile.reset(widget);}},dispose(){if(!disposed){disposed=true;token='';root.turnstile.remove(widget);}}};
   }
   async function account(action,username,password,confirmPassword,activationCode,captchaToken){
+    if(action==='register'&&config.signup===false)throw Error('注册已关闭，仅保留现有账号登录。');
     if(!persistent)throw Error('此浏览器禁止网站存储，请允许此网站保存登录状态，或换一个浏览器再登录。');
     if(typeof username!=='string'||!username||[...username].length>64||username!==username.trim()||/[\u0000-\u001f\u007f]/.test(username))
       throw Error('账号需要 1–64 个字符，首尾不能有空格。');

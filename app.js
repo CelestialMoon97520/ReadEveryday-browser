@@ -268,6 +268,8 @@
         drawDevices(host,next,ticket);notice.textContent=ticket?'旧登录已退出，请重新输入密码并完成安全验证后登录。':'其他浏览器已全部下线，当前登录保留。';
       });
     }
+    const registrationEnabled=window.READEVERYDAY_CLOUD?.signup!==false;
+    if(!signed&&!registrationEnabled)$('account-tab-register')?.remove();
     let busy=false;
     async function action(fn){
       if(busy)return;busy=true;sessionOperations++;section.querySelectorAll('button').forEach(b=>b.disabled=true);notice.textContent='正在处理…';
@@ -292,6 +294,7 @@
     }else{
       function select(tab,retainedName='',success=''){
         if(busy)return;
+        if(tab==='register'&&!registrationEnabled){notice.textContent='注册已关闭，仅保留现有账号登录。';return;}
         clearAccountCaptcha();
         section.querySelector('.device-recovery')?.remove();
         section.querySelectorAll('[role="tab"]').forEach(button=>{const selected=button.id==='account-tab-'+tab;button.setAttribute('aria-selected',selected);button.tabIndex=selected?0:-1;});
@@ -332,7 +335,7 @@
       }
       section.querySelectorAll('[role="tab"]').forEach(button=>{
         button.onclick=()=>select(button.id.replace('account-tab-',''),$('account-username')?.value||'');
-        button.onkeydown=event=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key)||busy)return;event.preventDefault();const tabs=[...section.querySelectorAll('[role="tab"]')],index=tabs.indexOf(button);const next=event.key==='Home'?0:event.key==='End'?2:(index+(event.key==='ArrowRight'?1:2))%3;tabs[next].click();tabs[next].focus();};
+        button.onkeydown=event=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key)||busy)return;event.preventDefault();const tabs=[...section.querySelectorAll('[role="tab"]')],index=tabs.indexOf(button);const next=event.key==='Home'?0:event.key==='End'?tabs.length-1:(index+(event.key==='ArrowRight'?1:tabs.length-1))%tabs.length;tabs[next].click();tabs[next].focus();};
       });
       select(mode,username,message);
     }
